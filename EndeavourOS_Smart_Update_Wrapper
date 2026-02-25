@@ -1,0 +1,1084 @@
+#!/bin/bash
+
+# --- 1.1 Color Palette ---
+if [ -t 1 ]; then
+    reset='\033[0m'
+    bold='\033[1m'
+    dim='\033[2m'
+    red='\033[38;5;196m'
+    green='\033[38;5;71m'
+    yellow='\033[38;5;214m'
+    blue='\033[38;5;75m'
+    magenta='\033[38;5;176m'
+    cyan='\033[38;5;79m'
+    white='\033[38;5;255m'
+    gray='\033[38;5;244m'
+    bg_crit='\033[48;5;160;38;5;255;1m'
+    bg_core='\033[48;5;237;38;5;214;1m'
+    bg_nuke='\033[48;5;196;38;5;255;1m'
+    bg_feat='\033[48;5;214;38;5;0;1m'
+else
+    reset='' bold='' dim='' red='' green='' yellow='' blue=''
+    magenta='' cyan='' white='' gray='' bg_crit='' bg_core='' bg_nuke='' bg_feat=''
+fi
+
+# --- 1.2 Dependency Check ---
+for cmd in python3 tar awk stat fuser; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo -e "${red}Error: Required command '$cmd' is not installed.${reset}"
+        if [[ "$cmd" == "fuser" ]]; then
+            echo -e "${gray}Please install the 'psmisc' package: sudo pacman -S psmisc${reset}"
+        fi
+        exit 1
+    fi
+done
+
+# --- 2.1 Nuclear Package Configuration ---
+NUCLEAR_PKGS=(
+    # --- The Core of the Core ---
+    "glibc" "lib32-glibc"
+    "gcc-libs" "lib32-gcc-libs"
+    "ncurses" "readline"
+    "openssl"
+
+    # --- Boot & Init ---
+    "grub" "efibootmgr" "os-prober"
+    "systemd" "systemd-libs" "systemd-sysvcompat"
+    "cryptsetup" "device-mapper" "lvm2"
+    "mkinitcpio" "dracut"
+
+    # --- Microcode ---
+    "amd-ucode" "intel-ucode"
+
+    # --- Kernels ---
+    "linux" "linux-headers"
+    "linux-lts" "linux-lts-headers"
+    "linux-zen" "linux-zen-headers"
+    "linux-hardened" "linux-hardened-headers"
+    "linux-firmware"
+
+    # --- NVIDIA ---
+    "nvidia" "nvidia-lts" "nvidia-dkms"
+    "nvidia-open" "nvidia-open-lts" "nvidia-open-dkms"
+    "nvidia-utils" "lib32-nvidia-utils"
+
+    # --- Package Manager Self-Update ---
+    "pacman" "archlinux-keyring" "endeavouros-keyring"
+)
+
+# --- 2.2 Critical Package Configuration ---
+CRITICAL_PKGS=(
+    # --- Firmware ---
+    "sof-firmware"
+
+    # --- NVIDIA Drivers ---
+    "nvidia-settings"
+    "opencl-nvidia" "lib32-opencl-nvidia"
+    "nvidia-prime" "cuda" "lib32-cuda"
+
+    # --- Systemd & Init ---
+    "systemd-resolvconf"
+    "lib32-systemd"
+
+    # --- Core System & Base ---
+    "base" "base-devel" "filesystem"
+    "dbus" "dbus-broker"
+    "glib2" "lib32-glib2" "sqlite"
+    "util-linux" "libutil-linux" "coreutils" "icu"
+    "bash" "zsh" "sudo" "polkit" "shadow" "zstd"
+    "llvm" "llvm-libs" "lib32-llvm-libs" "clang"
+    "python" "dkms" "fuse3"
+
+    # --- Filesystems ---
+    "btrfs-progs" "dosfstools" "e2fsprogs"
+    "xfsprogs" "ntfs-3g" "exfatprogs"
+
+    # --- Package Management ---
+    "pacman-contrib"
+    "pacman-mirrorlist" "endeavouros-mirrorlist"
+    "pam" "pambase"
+    "yay" "paru"
+
+    # --- EndeavourOS Specific ---
+    "eos-update" "eos-hooks"
+
+    # --- Graphics Stack ---
+    "mesa" "lib32-mesa" "mesa-utils" "mesa-libgl"
+    "vulkan-icd-loader" "lib32-vulkan-icd-loader"
+    "xorg-server" "xorg-xwayland" "wayland" "wayland-protocols"
+
+    # --- AMD ---
+    "xf86-video-amdgpu" "xf86-video-ati"
+    "vulkan-radeon" "lib32-vulkan-radeon"
+    "amdvlk" "lib32-amdvlk"
+    "rocm-hip-runtime" "opencl-mesa" "lib32-opencl-mesa"
+
+    # --- INTEL ---
+    "xf86-video-intel"
+    "vulkan-intel" "lib32-vulkan-intel"
+    "intel-media-driver" "libva-intel-driver"
+    "onevpl-intel-gpu" "intel-compute-runtime"
+
+    # Hardware Video Acceleration
+    "libva-mesa-driver" "lib32-libva-mesa-driver"
+    "mesa-vdpau" "lib32-mesa-vdpau"
+
+    # Hybrid Graphics Switcher
+    "switcheroo-control" "envycontrol" "optimus-manager"
+
+    # Core Apps
+    "dolphin" "konsole"
+)
+
+# --- 2.3 Feature Package Configuration ---
+FEATURE_PKGS=(
+    # Audio & Networking
+    "pipewire" "pipewire-audio" "wireplumber" "pipewire-pulse" "lib32-pipewire"
+    "alsa-lib" "lib32-alsa-lib" "alsa-utils" "alsa-plugins"
+    "networkmanager" "iwd" "wpa_supplicant" "bluez" "bluez-utils" "bluez-libs"
+
+    # Frameworks & Libraries
+    "qt6-base" "qt5-base" "kwayland" "egl-wayland"
+
+    # --- EndeavourOS Utilities ---
+    "welcome" "eos-apps-info" "eos-rankmirrors"
+
+    # --- KDE ---
+    "plasma-desktop" "plasma-workspace" "kwin"
+    "systemsettings" "sddm" "kde-cli-tools" "powerdevil"
+    "polkit-kde-agent" "breeze" "qt6-wayland"
+    "xdg-desktop-portal-kde" "spectacle" "kinfocenter"
+    "plasma-nm" "plasma-pa" "kscreen"
+
+    # --- GNOME ---
+    "gnome-shell" "mutter" "gnome-session"
+    "gnome-control-center" "gnome-settings-daemon"
+    "gdm" "libadwaita" "gtk4" "gtk3"
+    "xdg-desktop-portal-gnome" "gnome-keyring" "nautilus"
+    "gvfs" "xdg-user-dirs-gtk" "gnome-terminal" "console"
+
+    # --- COSMIC ---
+    "cosmic-comp" "cosmic-session" "cosmic-greeter"
+    "cosmic-settings" "cosmic-panel" "cosmic-applets"
+    "cosmic-launcher" "cosmic-workspaces" "cosmic-files"
+    "xdg-desktop-portal-cosmic" "cosmic-notifications"
+    "cosmic-bg" "cosmic-osd" "cosmic-randr" "cosmic-app-library"
+
+    # --- XFCE ---
+    "xfwm4" "xfce4-session" "xfce4-panel"
+    "xfce4-settings" "xfdesktop" "thunar"
+    "libxfce4ui" "exo" "garcon" "xfconf"
+    "xfce4-power-manager" "xfce4-notifyd"
+    "gvfs" "thunar-volman" "polkit-gnome"
+
+    # --- LXQt ---
+    "lxqt-session" "lxqt-panel" "lxqt-globalkeys"
+    "lxqt-notificationd" "lxqt-runner" "pcmanfm-qt"
+    "liblxqt" "lxqt-policykit" "openbox"
+    "xdg-desktop-portal-lxqt" "lxqt-sudo"
+    "gvfs"
+
+    # --- I3 ---
+    "i3-wm" "i3status" "i3lock" "i3blocks"
+    "dmenu" "rofi" "dunst" "picom" "feh"
+    "polkit-gnome" "xorg-server" "xorg-xinit"
+    "network-manager-applet"
+
+    # --- SWAY ---
+    "sway" "swaybg" "swayidle" "swaylock"
+    "wlroots" "xorg-xwayland" "polkit-gnome"
+    "xdg-desktop-portal-wlr" "xdg-desktop-portal-gtk"
+    "dmenu" "grim" "slurp"
+    "mako" "network-manager-applet"
+
+    # --- HYPRLAND ---
+    "hyprland" "hyprland-protocols"
+    "aquamarine" "hyprlang" "hyprcursor" "hyprutils"
+    "xdg-desktop-portal-hyprland" "xdg-desktop-portal-gtk"
+    "hyprlock" "hypridle" "hyprpaper"
+    "qt6-wayland" "qt5-wayland" "kitty"
+    "polkit-gnome" "dunst" "network-manager-applet"
+    "hyprgraphics" "hyprland-qtutils" "hyprland-guiutils"
+
+    # --- CINNAMON ---
+    "cinnamon" "cinnamon-session"
+    "cinnamon-settings-daemon" "cinnamon-control-center"
+    "muffin" "cinnamon-screensaver"
+    "cinnamon-menus" "nemo" "gnome-keyring"
+    "gvfs"
+
+    # --- MATE ---
+    "mate-desktop" "mate-session-manager"
+    "mate-panel" "mate-settings-daemon"
+    "mate-control-center" "marco"
+    "caja" "libmateweather" "mate-polkit"
+    "gvfs"
+
+    # --- LABWC ---
+    "labwc" "labwc-menu-generator"
+    "wlroots" "sfwbar" "kanshi"
+    "waybar" "wlr-randr"
+    "xdg-desktop-portal-wlr"
+    "mako" "polkit-gnome"
+
+    # --- OPENBOX ---
+    "openbox" "obconf" "tint2"
+    "lxappearance" "feh" "picom"
+    "dmenu" "rofi"
+    "polkit-gnome"
+
+    # --- QTILE ---
+    "qtile" "qtile-extras"
+    "python-psutil" "python-iwlib" "python-xdg"
+    "python-pywlroots" "python-cffi" "python-dbus-next"
+    "python-gobject"
+    "polkit-gnome" "dunst" "network-manager-applet"
+    "python-cairocffi" "python-xcffib"
+    "python-pywayland" "python-xkbcommon"
+
+    # --- NIRI ---
+    "niri" "fuzzel" "mako"
+    "xwayland-satellite"
+    "xdg-desktop-portal-gnome"
+    "xdg-desktop-portal-gtk"
+    "polkit-gnome" "network-manager-applet"
+)
+
+declare -A NUKE_MAP
+for pkg in "${NUCLEAR_PKGS[@]}"; do NUKE_MAP["$pkg"]=1; done
+
+declare -A CRIT_MAP
+for pkg in "${CRITICAL_PKGS[@]}"; do CRIT_MAP["$pkg"]=1; done
+
+declare -A FEAT_MAP
+for pkg in "${FEATURE_PKGS[@]}"; do FEAT_MAP["$pkg"]=1; done
+
+# --- 3. Temporary Files ---
+OUTPUT_FILE=$(mktemp)
+SYNC_LOG=$(mktemp)
+
+if ! CHECK_DB=$(mktemp -d /tmp/checkupdates-db.XXXXXX); then
+    echo -e "${red}Error: Could not create temp db directory.${reset}"
+    exit 1
+fi
+
+cleanup() {
+    if [[ -n "$CHECK_DB" && -d "$CHECK_DB" && "$CHECK_DB" == /tmp/* && "$CHECK_DB" != "/tmp/" ]]; then
+        rm -rf "$CHECK_DB" 2>/dev/null
+
+        if [[ -d "$CHECK_DB" ]]; then
+            sudo -n rm -rf -- "$CHECK_DB" 2>/dev/null
+
+            if [[ -d "$CHECK_DB" ]]; then
+                echo -e "\n\r\033[2K${yellow}⚠ Cleaning up temporary RAM files (/tmp)... Password required.${reset}"
+                sudo rm -rf -- "$CHECK_DB"
+            fi
+        fi
+    fi
+
+    local files_to_remove=()
+    [[ -f "$OUTPUT_FILE" ]] && files_to_remove+=("$OUTPUT_FILE")
+    [[ -f "$SYNC_LOG" ]] && files_to_remove+=("$SYNC_LOG")
+
+    if [[ ${#files_to_remove[@]} -gt 0 ]]; then
+        rm -f "${files_to_remove[@]}"
+    fi
+}
+
+trap cleanup EXIT INT TERM
+
+# --- 4. Helper Functions ---
+log_step() {
+    echo -e "${dim}[$(date +%T)] $1${reset}"
+}
+
+get_update_type() {
+    local old=$1
+    local new=$2
+
+    local v_old=${old#*:}
+    local v_new=${new#*:}
+
+    if [[ "$old" == *":"* || "$new" == *":"* ]]; then
+        local e_old=${old%%:*}
+        local e_new=${new%%:*}
+        [[ "$e_old" != "$e_new" ]] && { echo "EPOCH"; return; }
+    fi
+
+    local nums_old=($(echo "$v_old" | sed 's/[^0-9]/ /g'))
+    local nums_new=($(echo "$v_new" | sed 's/[^0-9]/ /g'))
+
+    local len=${#nums_new[@]}
+    for (( i=0; i<len; i++ )); do
+        local n_old=${nums_old[$i]}
+        local n_new=${nums_new[$i]}
+
+        [[ -z "$n_old" ]] && { echo "MINOR"; return; }
+
+        if (( 10#${n_old:-0} != 10#${n_new:-0} )); then
+
+            if (( (10#${n_new:-0} >= 2020 && 10#${n_new:-0} <= 2100) || \
+                  (10#${n_new:-0} >= 20200000 && 10#${n_new:-0} <= 21001231) )); then
+                echo "CALVER"
+                return
+            fi
+
+            if (( i == 0 )); then
+                echo "MAJOR"
+            elif (( i == 1 )); then
+                echo "MINOR"
+            else
+                echo "Patch"
+            fi
+            return
+        fi
+    done
+
+    echo "Patch"
+}
+
+get_type_color() {
+    case $1 in
+        "MAJOR") echo "$red$bold" ;;
+        "CALVER") echo "$blue$bold" ;;
+        "MINOR") echo "$cyan" ;;
+        "EPOCH") echo "$magenta" ;;
+        *) echo "$gray" ;;
+    esac
+}
+
+check_arch_news() {
+    log_step "Starting Arch News check (Python)..."
+    echo -ne "${gray}  Checking Arch News... ${reset}"
+
+    if news_ts=$(python3 -c "
+import sys, urllib.request, xml.etree.ElementTree as ET, email.utils
+try:
+    with urllib.request.urlopen('https://archlinux.org/feeds/news/', timeout=3) as req:
+        root = ET.fromstring(req.read())
+    item = root.find('./channel/item')
+    if item is not None:
+        pubDate = item.find('pubDate').text
+        parsed = email.utils.parsedate_tz(pubDate)
+        print(int(email.utils.mktime_tz(parsed)))
+    else:
+        sys.exit(1)
+except Exception:
+    sys.exit(1)
+"); then
+        now_time=$(date +%s)
+        diff_hours=$(( (now_time - news_ts) / 3600 ))
+
+        if (( diff_hours < 336 )); then # 14 days
+            echo -e "\r\033[2K${red}${bold}  ⚠ WARNING: Fresh Arch News detected ($diff_hours h ago)!${reset}"
+            echo -e "  ${red}  Check https://archlinux.org/ before updating.${reset}\n"
+        else
+            echo -e "\r\033[2K${green}  ✔ No fresh Arch News (last: ${diff_hours}h ago).${reset}\n"
+        fi
+    else
+        echo -e "\r\033[2K${dim}  ? Could not check Arch News (Connection or XML error).${reset}\n"
+    fi
+}
+
+backup_pacman_db() {
+    local BACKUP_DIR="/var/lib/pacman/backup"
+    local KEEP_COPIES=5
+
+    log_step "Creating Pacman DB backup..."
+
+    if [[ ! -d "$BACKUP_DIR" ]]; then
+        sudo mkdir -p "$BACKUP_DIR"
+    fi
+
+    local BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+    local BACKUP_FILE="$BACKUP_DIR/pacman_database_$BACKUP_DATE.tar.gz"
+
+    if sudo tar --xattrs --warning=no-file-changed -czf "$BACKUP_FILE" -C /var/lib/pacman/ local; then
+        echo -e "  ${green}✔ Backup created: ${white}$(basename "$BACKUP_FILE")${reset}"
+
+        (cd "$BACKUP_DIR" && ls -tp pacman_database_*.tar.gz | grep -v '/$' | tail -n +$((KEEP_COPIES + 1)) | xargs -I {} sudo rm -- {})
+    else
+        echo -e "  ${red}✘ Failed to create backup!${reset}"
+        echo -ne "  ${yellow}Continue anyway? [y/N]: ${reset}"
+        read -r cont
+        if [[ ! "$cont" =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+}
+
+# --- 5. Mirror Refresh Function ---
+refresh_mirrors() {
+    local reason="${1:-Mirror instability detected (timeouts or errors).}"
+
+    echo -e "\n${yellow}${bold}⚠  $reason${reset}"
+    echo -ne "  ${white}Refresh mirrors (Germany/Netherlands, HTTPS, Rate, Age < 6h)? [Y/n]: ${reset}"
+    read -r ans
+    if [[ "$ans" =~ ^[Yy]$ || -z "$ans" ]]; then
+
+        if command -v eos-rankmirrors &>/dev/null; then
+            echo -e "  ${blue}󰚰  Ranking EndeavourOS mirrors (Timeout: 5s)...${reset}"
+            if sudo eos-rankmirrors -t 5 > /dev/null; then
+                echo -e "  ${green}  ✔ EndeavourOS mirrors updated.${reset}"
+            else
+                echo -e "  ${red}  ✘ Failed to rank EOS mirrors.${reset}"
+            fi
+        fi
+
+        if command -v reflector &>/dev/null; then
+            echo -e "\n  ${blue}󰚰  Running reflector for Arch Linux...${reset}"
+            echo -e "  ${dim}  Searching Germany/Netherlands, HTTPS, Age < 6h... (WARNINGS ARE EXPECTED)${reset}"
+
+            if sudo reflector --country Germany,Netherlands --protocol https --age 6 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 5; then
+                echo -e "  ${green}  ✔ Arch mirrors updated successfully.${reset}\n"
+                return 0
+            else
+                echo -e "  ${red}  ✘ Reflector failed (Too strict? Try manual update).${reset}\n"
+                return 1
+            fi
+        else
+            echo -e "  ${red}✘ Error: 'reflector' is not installed.${reset}\n"
+            return 1
+        fi
+    fi
+    return 1
+}
+
+# --- 6. Main Logic ---
+log_step "Requesting Sudo access..."
+if ! sudo -v; then
+    echo -e "${red}Error: Sudo authentication failed.${reset}"
+    exit 1
+fi
+
+AUR_HELPER=""
+if command -v yay &>/dev/null; then AUR_HELPER="yay"
+elif command -v paru &>/dev/null; then AUR_HELPER="paru"
+fi
+
+echo -e "\n${blue}${bold}  󰚰  Checking for updates...${reset}"
+
+if [[ -f /var/lib/pacman/db.lck ]]; then
+    if sudo fuser /var/lib/pacman/db.lck >/dev/null 2>&1; then
+        echo -e "${red}Error: Pacman database is locked (/var/lib/pacman/db.lck).${reset}"
+        echo -e "${yellow}Another package manager process is running.${reset}"
+        exit 1
+    else
+        echo -e "${yellow}⚠  Stale lock file found (no active process). Removing...${reset}"
+        sudo rm /var/lib/pacman/db.lck
+        echo -e "${green}✔  Lock file removed. Proceeding...${reset}"
+    fi
+fi
+
+check_arch_news
+
+MIRROR_LIST="/etc/pacman.d/mirrorlist"
+if [[ -f "$MIRROR_LIST" ]]; then
+    now_ts=$(date +%s)
+    file_ts=$(stat -c %Y "$MIRROR_LIST" 2>/dev/null || echo "$now_ts")
+
+    mirror_age_days=$(( (now_ts - file_ts) / 86400 ))
+
+    if (( mirror_age_days >= 7 )); then
+        refresh_mirrors "Mirrors are old (${mirror_age_days} days)."
+    fi
+fi
+
+log_step "Copying local DB..."
+cp -a /var/lib/pacman/local "$CHECK_DB/" > /dev/null 2>&1
+
+sudo chown -R root:root "$CHECK_DB"
+sudo chmod 755 "$CHECK_DB"
+
+MAX_RETRIES=1
+attempt=0
+
+while (( attempt <= MAX_RETRIES )); do
+    log_step "Syncing temporary database (pacman -Sy)..."
+
+    set -o pipefail
+    if sudo pacman -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"; then
+        PACMAN_EXIT=0
+    else
+        PACMAN_EXIT=$?
+    fi
+    set +o pipefail
+
+    if grep -iqE "error|failed|timed out|could not resolve" "$SYNC_LOG"; then
+        IS_DIRTY=1
+    else
+        IS_DIRTY=0
+    fi
+
+    if [[ $PACMAN_EXIT -eq 0 && $IS_DIRTY -eq 0 ]]; then
+        break
+    else
+        if (( attempt < MAX_RETRIES )); then
+            if refresh_mirrors; then
+                ((attempt++))
+                log_step "Retrying sync..."
+                continue
+            else
+                if [[ $PACMAN_EXIT -eq 0 ]]; then
+                     echo -e "${yellow}Proceeding despite mirror warnings...${reset}"
+                     break
+                fi
+            fi
+        fi
+
+        if [[ $PACMAN_EXIT -ne 0 ]]; then
+            echo -e "${red}Error: Could not sync databases.${reset}"
+            exit 1
+        else
+            break
+        fi
+    fi
+done
+
+log_step "Calculating update list (pacman -Qu)..."
+
+sudo chown -R $(id -un):$(id -gn) "$CHECK_DB"
+
+repo_updates=$(LC_ALL=C pacman -Qu --dbpath "$CHECK_DB" --color never)
+repo_pkgs=$(echo "$repo_updates" | awk '{print $1}')
+
+aur_updates=""
+aur_pkgs=""
+
+if [[ -n "$AUR_HELPER" ]]; then
+    if aur_raw=$($AUR_HELPER -Qua --dbpath "$CHECK_DB" --color never 2>/dev/null); then
+        aur_updates="$aur_raw"
+        aur_pkgs=$(echo "$aur_updates" | awk '{print $1}')
+    fi
+fi
+
+updates="$repo_updates"
+[[ -n "$aur_updates" ]] && updates="$updates"$'\n'"$aur_updates"
+updates=$(echo "$updates" | sed '/^$/d')
+
+if [[ -z "$updates" ]]; then
+    echo -e "${green}  ✔ System is fully up to date.${reset}\n"
+    exit 0
+fi
+
+pkg_count=$(grep -c . <<< "$updates")
+if [[ -n "$aur_updates" ]]; then
+    aur_count=$(grep -c . <<< "$aur_updates")
+else
+    aur_count=0
+fi
+
+log_step "Found $pkg_count updates ($aur_count from AUR). Starting detailed analysis..."
+echo -e "${blue}${bold}  󰑮  Analyzing updates: ${white}$pkg_count packages${reset}"
+
+all_pkgs=$(echo "$updates" | awk '{print $1}')
+
+log_step "Fetching remote metadata (pacman -Si)..."
+declare -A NEW_DATA
+
+parse_pacman_si() {
+    awk -F': ' '
+        /^Name/ {n=$2}
+        /^Repository/ {r=$2}
+        /^Build Date/ {b=$2}
+        /^Download Size/ {s=$2}
+        /^Description/ {d=$2; gsub(/[|\t~]/, " ", d)}
+        /^$/ {if (n) {print n "~|~" r "|" b "|" s "|" d; n=""}}
+        END {if (n) print n "~|~" r "|" b "|" s "|" d}
+    '
+}
+
+if [[ -n "$repo_pkgs" ]]; then
+    while IFS='' read -r line; do
+        name=${line%%~|~*}
+        rest=${line#*~|~}
+        NEW_DATA["$name"]="$rest"
+    done < <(LC_ALL=C pacman -Si --dbpath "$CHECK_DB" --color never $repo_pkgs 2>/dev/null | parse_pacman_si)
+fi
+
+if [[ -n "$aur_pkgs" && -n "$AUR_HELPER" ]]; then
+    log_step "Fetching AUR metadata..."
+    while IFS='' read -r line; do
+        name=${line%%~|~*}
+        rest=${line#*~|~}
+        NEW_DATA["$name"]="$rest"
+    done < <(LC_ALL=C $AUR_HELPER -Si $aur_pkgs 2>/dev/null | awk -F': ' '
+        /^Name/ {n=$2}
+        /^Repository/ {r="AUR"}
+        /^Last Modified/ {b=$2}
+        /^Description/ {d=$2; gsub(/[|\t~]/, " ", d)}
+        /^$/ {if (n) {print n "~|~" r "|" b "|N/A|" d; n=""}}
+        END {if (n) print n "~|~" r "|" b "|N/A|" d}
+    ')
+fi
+
+log_step "Fetching local metadata (pacman -Qi)..."
+declare -A OLD_DATA
+while IFS='|' read -r name bdate reason; do
+    [[ -z "${OLD_DATA[$name]}" ]] && OLD_DATA["$name"]="$bdate|$reason"
+done < <(LC_ALL=C pacman -Qi $all_pkgs 2>/dev/null | awk -F': ' '
+    /^Name/ {n=$2}
+    /^Build Date/ {b=$2}
+    /^Install Reason/ {r=$2}
+    /^$/ {if (n) print n "|" b "|" r; n=""}
+')
+
+total_download_size="0 MiB"
+if [[ -n "$repo_pkgs" ]]; then
+    total_download_size=$(LC_ALL=C pacman -Si --dbpath "$CHECK_DB" $repo_pkgs 2>/dev/null | awk '
+        /^Download Size/ {
+            val=$4
+            unit=$5
+            if (unit == "KiB") val /= 1024
+            else if (unit == "GiB") val *= 1024
+            sum += val
+        }
+        END {
+            if (sum > 1024) printf "%.2f GiB", sum/1024
+            else printf "%.2f MiB", sum
+        }
+    ')
+fi
+
+log_step "Processing data and calculating diffs..."
+
+now=$(date +%s)
+current_idx=0
+
+max_name=7
+max_old=3
+max_new=3
+max_repo=4
+max_size=4
+
+while read -r pkgname old_ver _ new_ver _rest; do
+    ((current_idx++))
+    percent=$(( current_idx * 100 / pkg_count ))
+
+    if (( percent % 5 == 0 || current_idx == pkg_count )); then
+        filled=$(( percent / 5 ))
+        empty=$(( 20 - filled ))
+        printf "\r\033[2K  ${gray}Analysis: ${blue}["
+        printf "%${filled}s" | tr ' ' '='
+        printf ">"
+        printf "%${empty}s" | tr ' ' '-'
+        printf "] ${percent}%%${reset}"
+    fi
+
+    IFS='|' read -r repo date_new size desc <<< "${NEW_DATA[$pkgname]}"
+    IFS='|' read -r date_old reason <<< "${OLD_DATA[$pkgname]}"
+
+    is_explicit=0
+    [[ "$reason" == *"Explicitly"* ]] && is_explicit=1
+
+    (( ${#pkgname} > max_name )) && max_name=${#pkgname}
+    (( ${#old_ver} > max_old )) && max_old=${#old_ver}
+    (( ${#new_ver} > max_new )) && max_new=${#new_ver}
+    (( ${#repo} > max_repo )) && max_repo=${#repo}
+    (( ${#size} > max_size )) && max_size=${#size}
+
+    epoch_new=0
+    fmt_date_new=""
+    diff_hours=9999
+    if [[ -n "$date_new" && "$date_new" != "N/A" ]]; then
+        read -r epoch_new fmt_date_new <<< "$(LC_TIME=C date -d "$date_new" +'%s %d %b %H:%M' 2>/dev/null)"
+
+        if [[ -n "$epoch_new" ]] && (( epoch_new > 0 )); then
+            diff_hours=$(( (now - epoch_new) / 3600 ))
+        fi
+    fi
+
+    is_nuke=0
+    is_crit=0
+    is_feat=0
+
+    [[ ${NUKE_MAP["$pkgname"]} ]] && is_nuke=1
+    [[ ${CRIT_MAP["$pkgname"]} ]] && is_crit=1
+    [[ ${FEAT_MAP["$pkgname"]} ]] && is_feat=1
+
+    if (( is_nuke )); then
+        pkg_level=0
+    elif (( is_crit )); then
+        pkg_level=1
+    elif (( is_feat )); then
+        pkg_level=2
+    else
+        pkg_level=3
+    fi
+
+    upd_type=$(get_update_type "$old_ver" "$new_ver")
+
+    sort_key=$(printf "%d.%05d" "$pkg_level" "$diff_hours")
+
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$sort_key" "$diff_hours" "$pkg_level" "$upd_type" "$pkgname" "$old_ver" "$new_ver" \
+        "$repo" "$size" "$is_explicit" "$epoch_new" "$fmt_date_new" "$desc" >> "$OUTPUT_FILE"
+
+done <<< "$updates"
+
+echo -e "\n"
+
+# --- 7. Table Output ---
+w_age=6
+w_stat=8
+w_repo=$(( max_repo ))
+w_type=6
+w_name=$(( max_name ))
+w_old=$(( max_old ))
+w_new=$(( max_new ))
+w_size=$(( max_size ))
+w_date=12
+
+term_cols=$(tput cols 2>/dev/null || echo 120)
+used_width=$(( w_age + 1 + w_stat + 1 + w_repo + 1 + w_type + 1 + w_name + 1 + w_old + 3 + w_new + 1 + w_size + 1 + w_date + 1 ))
+w_desc=$(( term_cols - used_width - 1 ))
+
+if (( w_desc < 5 )); then
+    w_desc=0
+fi
+
+sep_line=$(printf "%${term_cols}s" | tr ' ' '-')
+
+printf "${dim}%s${reset}\n" "$sep_line"
+
+fmt_center() {
+    local str="$1"
+    local width="$2"
+    local len=${#str}
+    if (( len >= width )); then
+        printf "%s" "$str"
+    else
+        local l_pad=$(( (width - len) / 2 ))
+        local r_pad=$(( width - len - l_pad ))
+        printf "%*s%s%*s" $l_pad "" "$str" $r_pad ""
+    fi
+}
+
+h_age=$(fmt_center "AGE" "$w_age")
+h_stat=$(fmt_center "STATUS" "$w_stat")
+h_repo=$(fmt_center "REPO" "$w_repo")
+h_type=$(fmt_center "TYPE" "$w_type")
+h_name=$(fmt_center "PACKAGE" "$w_name")
+h_old=$(fmt_center "OLD" "$w_old")
+h_new=$(fmt_center "NEW" "$w_new")
+h_size=$(fmt_center "SIZE" "$w_size")
+h_date=$(fmt_center "NEW DATE" "$w_date")
+
+h_desc="DESCRIPTION"
+(( w_desc == 0 )) && h_desc=""
+
+printf "${bold}${gray}%s %s %s %s %s %s   %s %s %s %s${reset}\n" \
+    "$h_age" "$h_stat" "$h_repo" "$h_type" "$h_name" "$h_old" "$h_new" "$h_size" "$h_date" "$h_desc"
+
+printf "${dim}%s${reset}\n" "$sep_line"
+
+sort -n "$OUTPUT_FILE" | while IFS=$'\t' read -r key diff_hours pkg_level upd_type pkgname old_ver new_ver repo size is_explicit epoch_new fmt_date_new desc; do
+
+    if (( diff_hours == 9999 )); then age_disp="[?]"; age_col=$dim
+    else
+        age_disp="[${diff_hours}h]"
+        if (( diff_hours < 12 )); then age_col="${red}${bold}"
+        elif (( diff_hours < 48 )); then age_col="${yellow}"
+        else age_col="${green}"; fi
+    fi
+    printf -v f_age "%-${w_age}s" "$age_disp"
+    out_age="${age_col}${f_age}${reset}"
+
+    if (( pkg_level == 0 )); then
+        out_stat="${bg_nuke} ☢ NUKE ${reset}"
+    elif (( pkg_level == 1 )); then
+        out_stat="${bg_crit} ! CRIT ${reset}"
+    elif (( pkg_level == 2 )); then
+        out_stat="${bg_feat} * FEAT ${reset}"
+    else
+        out_stat="$(printf "%-${w_stat}s" " ")"
+    fi
+
+    printf -v f_repo "%-${w_repo}s" "$repo"
+    if [[ "$repo" == "AUR" ]]; then
+        out_repo="${magenta}${f_repo}${reset}"
+    else
+        out_repo="${dim}${f_repo}${reset}"
+    fi
+
+    type_col=$(get_type_color "$upd_type")
+    printf -v f_type "%-${w_type}s" "$upd_type"
+    out_type="${type_col}${f_type}${reset}"
+
+    if (( is_explicit == 1 )); then
+        name_col="${white}${bold}"
+    else
+        name_col="${gray}"
+    fi
+    printf -v f_name "%-${w_name}s" "$pkgname"
+    out_name="${name_col}${f_name}${reset}"
+
+    printf -v f_date_padded "%-${w_date}s" "$fmt_date_new"
+    out_date_new="${dim}${f_date_padded}${reset}"
+
+    printf -v f_size "%${w_size}s" "$size"
+    out_size="${white}${f_size}${reset}"
+
+    if (( w_desc > 0 )); then
+        if (( ${#desc} > w_desc )); then
+            out_desc="${dim}${desc:0:$((w_desc-1))}…${reset}"
+        else
+            out_desc="${dim}${desc}${reset}"
+        fi
+    else
+        out_desc=""
+    fi
+
+    printf "%b %b %b %b %b ${gray}%${w_old}s${reset} ${blue}→${reset} ${white}%-${w_new}s${reset} %b %b %b\n" \
+        "$out_age" "$out_stat" "$out_repo" "$out_type" "$out_name" \
+        "$old_ver" "$new_ver" "$out_size" "$out_date_new" "$out_desc"
+
+done
+
+printf "${dim}%s${reset}\n" "$sep_line"
+echo -e "  ${gray}Total Download Size: ${white}${bold}${total_download_size}${reset}"
+
+give_advice() {
+    local now=$(date +%s)
+
+    local T_MIRROR_H=3
+    local T_FEAT_H=6
+    local T_CRIT_H=12
+    local T_DE_H=12
+    local T_NUKE_H=24
+
+    local T_MIRROR_SEC=$(( T_MIRROR_H * 3600 ))
+    local T_FEAT_SEC=$(( T_FEAT_H * 3600 ))
+    local T_CRIT_SEC=$(( T_CRIT_H * 3600 ))
+    local T_DE_SEC=$(( T_DE_H * 3600 ))
+    local T_NUKE_SEC=$(( T_NUKE_H * 3600 ))
+
+    local fresh_pkg_count=0
+    local fresh_feat_count=0
+    local fresh_de_count=0
+    local fresh_crit_count=0
+    local fresh_nuke_count=0
+
+    local min_age_norm_sec=999999999
+    local min_age_feat_sec=999999999
+    local min_age_de_sec=999999999
+    local min_age_crit_sec=999999999
+    local min_age_nuke_sec=999999999
+
+    local risky_norm_pkg=""
+    local risky_feat_pkg=""
+    local risky_de_pkg=""
+    local risky_crit_pkg=""
+    local risky_nuke_pkg=""
+
+    local DE_PATTERN="^(plasma-|gnome-|hyprland|kwin|mutter|cinnamon|xfce4|qt[56]-|gtk[34]|kf[56]-|frameworkintegration)"
+
+    while IFS=$'\t' read -r _ _ pkg_level _ pkgname _ _ repo _ _ epoch_new _ _; do
+        [[ "$repo" == "AUR" ]] && continue
+
+        local pkg_ts=${epoch_new:-0}
+        (( pkg_ts == 0 )) && continue
+
+        local age_sec=$(( now - pkg_ts ))
+        (( age_sec < 0 )) && age_sec=0
+
+        if (( pkg_level == 0 )); then
+            if (( age_sec < T_NUKE_SEC )); then
+                ((fresh_nuke_count++))
+                if (( age_sec < min_age_nuke_sec )); then
+                    min_age_nuke_sec=$age_sec
+                    risky_nuke_pkg=$pkgname
+                fi
+            fi
+        fi
+
+        if (( pkg_level == 1 )); then
+            if (( age_sec < T_CRIT_SEC )); then
+                ((fresh_crit_count++))
+                if (( age_sec < min_age_crit_sec )); then
+                    min_age_crit_sec=$age_sec
+                    risky_crit_pkg=$pkgname
+                fi
+            fi
+        fi
+
+        if [[ "$pkgname" =~ $DE_PATTERN ]]; then
+            if (( age_sec < T_DE_SEC )); then
+                ((fresh_de_count++))
+                if (( age_sec < min_age_de_sec )); then
+                    min_age_de_sec=$age_sec
+                    risky_de_pkg=$pkgname
+                fi
+            fi
+        fi
+
+        if (( pkg_level == 2 )); then
+            if (( age_sec < T_FEAT_SEC )); then
+                ((fresh_feat_count++))
+                if (( age_sec < min_age_feat_sec )); then
+                    min_age_feat_sec=$age_sec
+                    risky_feat_pkg=$pkgname
+                fi
+            fi
+        fi
+
+        if (( age_sec < T_MIRROR_SEC )); then
+            ((fresh_pkg_count++))
+            if (( age_sec < min_age_norm_sec )); then
+                min_age_norm_sec=$age_sec
+                risky_norm_pkg=$pkgname
+            fi
+        fi
+
+    done < "$OUTPUT_FILE"
+
+    echo -e "${dim}---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------${reset}"
+
+    local max_wait_sec=0
+    local verdict_level=0 # 0=Safe, 1=Yellow, 2=Red, 3=NUCLEAR
+    local reasons=()
+
+    if (( fresh_nuke_count > 0 )); then
+        local wait=$(( T_NUKE_SEC - min_age_nuke_sec ))
+        (( wait > max_wait_sec )) && max_wait_sec=$wait
+        verdict_level=3
+        reasons+=("${red}${bold}HIGH RISK${dim} System Core updates (< ${T_NUKE_H}h). Wait for stability! (e.g., $risky_nuke_pkg)")
+    fi
+
+    if (( fresh_crit_count > 0 )); then
+        local wait=$(( T_CRIT_SEC - min_age_crit_sec ))
+        (( wait > max_wait_sec )) && max_wait_sec=$wait
+        (( verdict_level < 2 )) && verdict_level=2
+        reasons+=("Critical updates (< ${T_CRIT_H}h). (e.g., $risky_crit_pkg)")
+    fi
+
+    if (( fresh_de_count > 0 )); then
+        local wait=$(( T_DE_SEC - min_age_de_sec ))
+        (( wait > max_wait_sec )) && max_wait_sec=$wait
+        (( verdict_level < 2 )) && verdict_level=2
+        reasons+=("Major DE update detected (< ${T_DE_H}h). (e.g., $risky_de_pkg)")
+    fi
+
+    if (( fresh_feat_count > 0 )); then
+        local wait=$(( T_FEAT_SEC - min_age_feat_sec ))
+        (( wait > max_wait_sec )) && max_wait_sec=$wait
+        (( verdict_level < 1 )) && verdict_level=1
+        reasons+=("Fresh Feature updates (< ${T_FEAT_H}h). (e.g., $risky_feat_pkg)")
+    fi
+
+    if (( fresh_pkg_count > 0 )); then
+        local wait=$(( T_MIRROR_SEC - min_age_norm_sec ))
+        (( wait > max_wait_sec )) && max_wait_sec=$wait
+        (( verdict_level < 1 )) && verdict_level=1
+        reasons+=("Mirrors might not be fully synced (< ${T_MIRROR_H}h). (e.g., $risky_norm_pkg)")
+    fi
+
+    local color=$green
+    local verdict="SAFE"
+
+    case $verdict_level in
+        1) color=$yellow; verdict="REVIEW" ;;
+        2) color=$red; verdict="HOLD" ;;
+        3) color="${red}${bold}"; verdict="⛔ DANGER" ;;
+    esac
+
+    printf "  ${bold}ADVISOR:${reset} "
+
+    if (( max_wait_sec == 0 )); then
+        echo -e "${green}${bold}✅  GO FOR IT!${reset} ${dim}(Packages have stabilized. Mirrors synced.)${reset}"
+    else
+        local target_time=$(date -d "@$(( now + max_wait_sec ))" +%H:%M)
+
+        local wait_h=$(( max_wait_sec / 3600 ))
+        local wait_m=$(( (max_wait_sec % 3600) / 60 ))
+
+        local dur_str="+"
+        (( wait_h > 0 )) && dur_str+="${wait_h}h "
+        dur_str+="${wait_m}m"
+
+        echo -e "${color}${bold}$verdict${reset} ${white}→ Recommend waiting until ${bold}$target_time${reset} ($dur_str)"
+
+        if (( ${#reasons[@]} > 0 )); then
+             echo -ne "           ${dim}Reason: ${reasons[0]}${reset}"
+             for (( i=1; i<${#reasons[@]}; i++ )); do
+                 echo -ne "\n                   ${dim}+ ${reasons[$i]}${reset}"
+             done
+             echo ""
+        fi
+    fi
+    echo -e "${dim}---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------${reset}"
+}
+
+give_advice
+
+# --- 8. Update Request ---
+if command -v eos-update &> /dev/null; then
+    CORE_CMD="eos-update"
+elif [[ -n "$AUR_HELPER" ]]; then
+    CORE_CMD="$AUR_HELPER -Syu"
+else
+    CORE_CMD="sudo pacman -Syu"
+fi
+
+EXTRA_CMD=""
+if command -v topgrade &> /dev/null; then
+    EXTRA_CMD="topgrade"
+fi
+
+if [[ -n "$EXTRA_CMD" ]]; then
+    PROMPT_CMD="${CORE_CMD} && ${EXTRA_CMD}"
+else
+    PROMPT_CMD="${CORE_CMD}"
+fi
+
+sudo -v
+
+echo -ne "\n  ${bold}${white}Apply updates?${reset} ${dim}(${PROMPT_CMD})${reset} [Y/n]: "
+
+read -r answer
+
+if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
+    echo -e "\n"
+
+    backup_pacman_db
+
+    $CORE_CMD
+    core_exit=$?
+
+    pending_updates=$(LC_ALL=C pacman -Qu 2>/dev/null)
+
+    run_extra=false
+
+    if [[ -z "$pending_updates" ]]; then
+        if [[ $core_exit -eq 0 ]]; then
+            echo -e "\n${green}✔ Core updates applied successfully.${reset}"
+            run_extra=true
+        else
+            echo -e "\n${green}✔ No core updates pending.${reset}"
+            run_extra=true
+        fi
+
+    else
+        echo -e "\n${yellow}⚠  Core updates were NOT fully applied (Cancelled or Failed).${reset}"
+
+        if [[ -n "$EXTRA_CMD" ]]; then
+            echo -ne "  ${white}Run ${EXTRA_CMD} anyway? (Flatpaks/AUR etc) [y/N]: ${reset}"
+            read -r force_extra
+            if [[ "$force_extra" =~ ^[Yy]$ ]]; then
+                run_extra=true
+            else
+                echo -e "  ${dim}Skipping extra updates.${reset}\n"
+            fi
+        fi
+    fi
+
+    if [[ "$run_extra" == true && -n "$EXTRA_CMD" ]]; then
+        echo -e "\n${blue}${bold}  󰚰  Running Topgrade...${reset}\n"
+        $EXTRA_CMD
+    elif [[ -n "$pending_updates" ]]; then
+        echo -e "\n${red}  ✘ System partially updated or update cancelled.${reset}\n"
+    fi
+
+else
+    echo -e "  ${yellow}Operation cancelled.${reset}\n"
+fi
