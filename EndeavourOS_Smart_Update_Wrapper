@@ -1012,29 +1012,29 @@ give_advice() {
 give_advice
 
 # --- 8. Update Request ---
-if command -v eos-update &> /dev/null; then
-    CORE_CMD="eos-update"
-elif [[ -n "$AUR_HELPER" ]]; then
-    CORE_CMD="$AUR_HELPER -Syu"
-else
-    CORE_CMD="sudo pacman -Syu"
-fi
+HAS_EOS=false
+HAS_TOPGRADE=false
 
-EXTRA_CMD=""
-if command -v topgrade &> /dev/null; then
-    EXTRA_CMD="topgrade"
-fi
+command -v eos-update &> /dev/null && HAS_EOS=true
+command -v topgrade &> /dev/null && HAS_TOPGRADE=true
 
-if [[ -n "$EXTRA_CMD" ]]; then
-    PROMPT_CMD="${CORE_CMD} && ${EXTRA_CMD}"
+if $HAS_EOS && $HAS_TOPGRADE; then
+    PROMPT_CMD="eos-update && topgrade"
+elif $HAS_EOS; then
+    PROMPT_CMD="eos-update"
+elif $HAS_TOPGRADE; then
+    PROMPT_CMD="topgrade"
 else
-    PROMPT_CMD="${CORE_CMD}"
+    if [[ -n "$AUR_HELPER" ]]; then
+        PROMPT_CMD="$AUR_HELPER -Syu"
+    else
+        PROMPT_CMD="sudo pacman -Syu"
+    fi
 fi
 
 sudo -v
 
 echo -ne "\n  ${bold}${white}Apply updates?${reset} ${dim}(${PROMPT_CMD})${reset} [Y/n]: "
-
 read -r answer
 
 if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
@@ -1042,41 +1042,60 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 
     backup_pacman_db
 
-    $CORE_CMD
-    core_exit=$?
+    UPDATE_SUCCESS=false
 
-    pending_updates=$(LC_ALL=C pacman -Qu 2>/dev/null)
+    if $HAS_EOS && $HAS_TOPGRADE; then
+        echo -e "${blue}${bold}  󰚰  Running eos-update (Keyrings & Packages)...${reset}\n"
+        eos-update
+        core_exit=$?
 
-    run_extra=false
+        pending_updates=$(LC_ALL=C pacman -Qu 2>/dev/null)
 
-    if [[ -z "$pending_updates" ]]; then
-        if [[ $core_exit -eq 0 ]]; then
+        if [[ -z "$pending_updates" && $core_exit -eq 0 ]]; then
             echo -e "\n${green}✔ Core updates applied successfully.${reset}"
-            run_extra=true
+            echo -e "\n${blue}${bold}  󰚰  Running Topgrade (Firmware, Flatpaks, Dotfiles)...${reset}\n"
+            topgrade && UPDATE_SUCCESS=true
         else
-            echo -e "\n${green}✔ No core updates pending.${reset}"
-            run_extra=true
-        fi
-
-    else
-        echo -e "\n${yellow}⚠  Core updates were NOT fully applied (Cancelled or Failed).${reset}"
-
-        if [[ -n "$EXTRA_CMD" ]]; then
-            echo -ne "  ${white}Run ${EXTRA_CMD} anyway? (Flatpaks/AUR etc) [y/N]: ${reset}"
+            echo -e "\n${yellow}⚠  eos-update was cancelled or did not fully apply updates.${reset}"
+            echo -ne "  ${white}Run topgrade anyway? (Flatpaks/AUR etc) [y/N]: ${reset}"
             read -r force_extra
             if [[ "$force_extra" =~ ^[Yy]$ ]]; then
-                run_extra=true
+                topgrade
             else
                 echo -e "  ${dim}Skipping extra updates.${reset}\n"
             fi
         fi
+
+    elif $HAS_EOS; then
+        eos-update
+        core_exit=$?
+        if [[ $core_exit -eq 0 && -z "$(LC_ALL=C pacman -Qu 2>/dev/null)" ]]; then
+            UPDATE_SUCCESS=true
+        fi
+
+    elif $HAS_TOPGRADE; then
+        echo -e "${blue}${bold}  󰚰  Running Topgrade (System, AUR, Firmware, etc.)...${reset}\n"
+        topgrade && UPDATE_SUCCESS=true
+
+    else
+        echo -e "${blue}${bold}  󰚰  Running standard system update...${reset}\n"
+        if [[ -n "$AUR_HELPER" ]]; then
+            $AUR_HELPER -Syu
+            core_exit=$?
+        else
+            sudo pacman -Syu
+            core_exit=$?
+        fi
+
+        if [[ $core_exit -eq 0 && -z "$(LC_ALL=C pacman -Qu 2>/dev/null)" ]]; then
+            UPDATE_SUCCESS=true
+        fi
     fi
 
-    if [[ "$run_extra" == true && -n "$EXTRA_CMD" ]]; then
-        echo -e "\n${blue}${bold}  󰚰  Running Topgrade...${reset}\n"
-        $EXTRA_CMD
-    elif [[ -n "$pending_updates" ]]; then
-        echo -e "\n${red}  ✘ System partially updated or update cancelled.${reset}\n"
+    if $UPDATE_SUCCESS; then
+        echo -e "\n${green}✔ Update process finished successfully.${reset}\n"
+    else
+        echo -e "\n${red}✘ Update process completed with errors, partial updates, or was cancelled.${reset}\n"
     fi
 
 else
