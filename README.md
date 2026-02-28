@@ -3,8 +3,8 @@
 # 🛡️ Smart Update Wrapper for EndeavourOS & Arch Linux
 
 ![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
-![Arch Linux](https://img.shields.io/badge/OS-Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux)
 ![EndeavourOS](https://img.shields.io/badge/OS-EndeavourOS-7F3F98?style=for-the-badge&logo=endeavouros&logoColor=white)
+![Arch Linux](https://img.shields.io/badge/OS-Arch_Linux-1793D1?style=for-the-badge&logo=arch-linux)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
 **Tired of blindly running `pacman -Syu` and crossing your fingers that your system doesn't break?**
