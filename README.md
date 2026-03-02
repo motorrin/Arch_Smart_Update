@@ -27,6 +27,7 @@
 - **🔒 Intelligent Lock File Removal:** Detects a stale `/var/lib/pacman/db.lck` file and uses `fuser` to check if a package manager is actually running. If it's a phantom lock, the script safely removes it for you.
 - **🚨 IgnorePkg Conflict Checker:** If you have frozen packages via `pacman.conf`, the script simulates the update in the background and warns you of any dependency breakages caused by skipped packages.
 - **🧩 Seamless Ecosystem Integration:** Full, native support for AUR helpers (`yay`, `paru`), as well as synergy with `eos-update` and `topgrade` to handle your Flatpaks, firmwares, and dotfiles.
+- **🎛️ Smart Configuration Management:** The script separates upstream default configurations from your personal overrides. Your custom commands, mirror settings, and specific critical packages are stored safely in ~/.config/arch-smart-update/ and will never be overwritten when the script updates its internal package lists from GitHub.
 
 ---
 
@@ -42,8 +43,27 @@ The script recognizes hundreds of packages (from DEs to base system components) 
   > *Recommendation:* Wait **6 hours**.
 - **📦 Standard Packages & AUR:**
   > *Recommendation:* Wait **3 hours**.
+- **💡 Customizing the lists:** You don't have to wait for an update to add your specific apps to these categories! You can easily append your own packages to the NUKE, CRIT, or FEAT lists using the user_packages.conf file, and your changes will survive all future script updates.
 
 ---
+
+## 📁 Configuration & Customization
+
+On its first run, the script creates a configuration folder at `~/.config/arch-smart-update/` and downloads the latest default templates from GitHub. 
+
+To ensure your personal settings are never overwritten by script updates, the configuration is split into two types:
+
+**1. Developer Managed (Auto-updating via GitHub):**
+- `packages.conf` — The master list of categorized packages.
+- `*.default.conf` — Templates showing the latest recommended syntax.
+
+**2. User Managed (Safe from overwrites):**
+- `user_packages.conf` — Add your own packages to the threat levels here. For example: `CRITICAL_PKGS+=("my-important-app")`.
+- `custom_commands.conf` — Define custom update commands (e.g., `flatpak update -y`). If populated, the script will run these *instead* of standard pacman/topgrade utilities.
+- `reflector.conf` — Your custom `reflector` command for generating mirrorlists.
+
+Whenever the master configuration on GitHub is updated, the script will quietly pull the changes without touching your custom files!
+
 
 ## 📋 Dependencies
 
