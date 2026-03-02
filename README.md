@@ -69,7 +69,6 @@ To ensure your personal settings are never overwritten by script updates, the co
 
 Whenever the master configuration on GitHub is updated, the script will quietly pull the changes without touching your custom files!
 
-
 ## 📋 Dependencies
 
 The script relies on standard system utilities, but make sure you have the following packages installed:
@@ -91,10 +90,9 @@ For paru:
 ## Option 2: Manual Installation
 If you prefer not to use the AUR, you can install the script manually:
 
-`curl -O https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/arch-smart-update`  
-`chmod +x arch-smart-update`  
-`mv arch-smart-update ~/arch-smart-update`  
-
+1. `curl -O https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/arch-smart-update`  
+2. `chmod +x arch-smart-update`  
+3. `mv arch-smart-update ~/arch-smart-update`  
 
 ## ❓ How do I use this script?
 If you installed via AUR, the command is globally available as:  
@@ -102,7 +100,7 @@ If you installed via AUR, the command is globally available as:
 If you installed Manually, the command is:  
 `~/arch-smart-update`
 
-## Why write so many letters? Create an alias!
+## ⌨️ Why write so many letters? Create an alias!
 
 ### 1. Check if you're using bash or zsh:
 `echo $0`
