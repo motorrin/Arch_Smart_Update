@@ -23,7 +23,7 @@ else
 fi
 
 # --- 1.2 Dependency Check ---
-for cmd in python3 tar awk stat fuser; do
+for cmd in python3 tar awk stat fuser curl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo -e "${red}Error: Required command '$cmd' is not installed.${reset}"
         if [[ "$cmd" == "fuser" ]]; then
@@ -33,216 +33,97 @@ for cmd in python3 tar awk stat fuser; do
     fi
 done
 
-# --- 2.1 Nuclear Package Configuration ---
-NUCLEAR_PKGS=(
-    # --- The Core of the Core ---
-    "glibc" "lib32-glibc"
-    "gcc-libs" "lib32-gcc-libs"
-    "ncurses" "readline"
-    "openssl"
+# --- 2. Configuration & External Files ---
+if [[ -n "$SUDO_USER" ]]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    USER_HOME=$HOME
+fi
+CONFIG_DIR="${XDG_CONFIG_HOME:-$USER_HOME/.config}/arch-smart-update"
+mkdir -p "$CONFIG_DIR"
 
-    # --- Boot & Init ---
-    "grub" "efibootmgr" "os-prober"
-    "systemd" "systemd-libs" "systemd-sysvcompat"
-    "cryptsetup" "device-mapper" "lvm2"
-    "mkinitcpio" "dracut"
+PKG_CONF="$CONFIG_DIR/packages.conf"
+CMD_DEFAULT="$CONFIG_DIR/custom_commands.default.conf"
+REFL_DEFAULT="$CONFIG_DIR/reflector.default.conf"
 
-    # --- Microcode ---
-    "amd-ucode" "intel-ucode"
+USER_PKG_CONF="$CONFIG_DIR/user_packages.conf"
+CMD_CONF="$CONFIG_DIR/custom_commands.conf"
+REFL_CONF="$CONFIG_DIR/reflector.conf"
 
-    # --- Kernels ---
-    "linux" "linux-headers"
-    "linux-lts" "linux-lts-headers"
-    "linux-zen" "linux-zen-headers"
-    "linux-hardened" "linux-hardened-headers"
-    "linux-firmware"
+update_from_github() {
+    local file_path="$1"
+    local url="$2"
+    local expected_string="$3"
+    local filename=$(basename "$file_path")
+    local tmp_file
+    tmp_file=$(mktemp "/tmp/${filename}.XXXXXX")
 
-    # --- NVIDIA ---
-    "nvidia" "nvidia-lts" "nvidia-dkms"
-    "nvidia-open" "nvidia-open-lts" "nvidia-open-dkms"
-    "nvidia-utils" "lib32-nvidia-utils"
+    if curl -sLfo "$tmp_file" --connect-timeout 3 "$url"; then
+        if [[ -n "$expected_string" ]] && ! grep -q "$expected_string" "$tmp_file"; then
+            rm -f "$tmp_file"
+            [[ ! -f "$file_path" ]] && echo -e "${red}  ✘ Failed to download $filename (Invalid format / Captive Portal)${reset}"
+            return 1
+        fi
 
-    # --- Package Manager Self-Update ---
-    "pacman" "archlinux-keyring" "endeavouros-keyring"
-)
+        if [[ ! -f "$file_path" ]]; then
+            mv "$tmp_file" "$file_path"
+            echo -e "${dim}  ✔ Downloaded $filename from GitHub...${reset}"
+        elif ! cmp -s "$file_path" "$tmp_file"; then
+            mv "$tmp_file" "$file_path"
+            echo -e "${green}  ✔ Updated $filename from GitHub!${reset}"
+        else
+            rm -f "$tmp_file"
+        fi
+    else
+        [[ ! -f "$file_path" ]] && echo -e "${red}  ✘ Failed to download $filename (No internet?)${reset}"
+        rm -f "$tmp_file"
+    fi
+}
 
-# --- 2.2 Critical Package Configuration ---
-CRITICAL_PKGS=(
-    # --- Firmware ---
-    "sof-firmware"
+echo -e "${dim}  Checking for configuration updates...${reset}"
 
-    # --- NVIDIA Drivers ---
-    "nvidia-settings"
-    "opencl-nvidia" "lib32-opencl-nvidia"
-    "nvidia-prime" "cuda" "lib32-cuda"
+update_from_github "$PKG_CONF" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/packages.conf" "NUCLEAR_PKGS"
+update_from_github "$CMD_DEFAULT" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/custom_commands.conf" "custom commands configuration"
+update_from_github "$REFL_DEFAULT" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/reflector.conf" "Reflector settings"
 
-    # --- Systemd & Init ---
-    "systemd-resolvconf"
-    "lib32-systemd"
+if [[ ! -f "$CMD_CONF" && -f "$CMD_DEFAULT" ]]; then
+    cp "$CMD_DEFAULT" "$CMD_CONF"
+    echo -e "${dim}  Created default $CMD_CONF${reset}"
+fi
 
-    # --- Core System & Base ---
-    "base" "base-devel" "filesystem"
-    "dbus" "dbus-broker"
-    "glib2" "lib32-glib2" "sqlite"
-    "util-linux" "libutil-linux" "coreutils" "icu"
-    "bash" "zsh" "sudo" "polkit" "shadow" "zstd"
-    "llvm" "llvm-libs" "lib32-llvm-libs" "clang"
-    "python" "dkms" "fuse3"
+if [[ ! -f "$REFL_CONF" && -f "$REFL_DEFAULT" ]]; then
+    cp "$REFL_DEFAULT" "$REFL_CONF"
+    echo -e "${dim}  Created default $REFL_CONF${reset}"
+fi
 
-    # --- Filesystems ---
-    "btrfs-progs" "dosfstools" "e2fsprogs"
-    "xfsprogs" "ntfs-3g" "exfatprogs"
+if [[ ! -f "$USER_PKG_CONF" ]]; then
+    cat <<EOF > "$USER_PKG_CONF"
+# user_packages.conf
+# Here you can add your packages to the existing categories in packages.conf.
+# This file will NEVER be overwritten by the script during updates.
+#
+# Example usage:
+# NUCLEAR_PKGS+=("my-custom-kernel")
+# CRITICAL_PKGS+=("my-critical-app" "another-app")
+# FEATURE_PKGS+=("my-feature-app")
 
-    # --- Package Management ---
-    "pacman-contrib"
-    "pacman-mirrorlist" "endeavouros-mirrorlist"
-    "pam" "pambase"
-    "yay" "paru"
+EOF
+    echo -e "${dim}  Created default user_packages.conf${reset}"
+fi
 
-    # --- EndeavourOS Specific ---
-    "eos-update" "eos-hooks"
+NUCLEAR_PKGS=("glibc" "linux" "systemd" "pacman" "nvidia" "mkinitcpio")
+CRITICAL_PKGS=("base" "base-devel" "mesa" "wayland" "xorg-server" "dbus")
+FEATURE_PKGS=("pipewire" "plasma-desktop" "gnome-shell" "hyprland" "networkmanager")
 
-    # --- Graphics Stack ---
-    "mesa" "lib32-mesa" "mesa-utils" "mesa-libgl"
-    "vulkan-icd-loader" "lib32-vulkan-icd-loader"
-    "xorg-server" "xorg-xwayland" "wayland" "wayland-protocols"
+if [[ -f "$PKG_CONF" ]]; then
+    source "$PKG_CONF"
+else
+    echo -e "${red}  ⚠ Could not load packages.conf. Using built-in basic fallbacks.${reset}"
+fi
 
-    # --- AMD ---
-    "xf86-video-amdgpu" "xf86-video-ati"
-    "vulkan-radeon" "lib32-vulkan-radeon"
-    "amdvlk" "lib32-amdvlk"
-    "rocm-hip-runtime" "opencl-mesa" "lib32-opencl-mesa"
-
-    # --- INTEL ---
-    "xf86-video-intel"
-    "vulkan-intel" "lib32-vulkan-intel"
-    "intel-media-driver" "libva-intel-driver"
-    "onevpl-intel-gpu" "intel-compute-runtime"
-
-    # Hardware Video Acceleration
-    "libva-mesa-driver" "lib32-libva-mesa-driver"
-    "mesa-vdpau" "lib32-mesa-vdpau"
-
-    # Hybrid Graphics Switcher
-    "switcheroo-control" "envycontrol" "optimus-manager"
-
-    # Core Apps
-    "dolphin" "konsole"
-)
-
-# --- 2.3 Feature Package Configuration ---
-FEATURE_PKGS=(
-    # Audio & Networking
-    "pipewire" "pipewire-audio" "wireplumber" "pipewire-pulse" "lib32-pipewire"
-    "alsa-lib" "lib32-alsa-lib" "alsa-utils" "alsa-plugins"
-    "networkmanager" "iwd" "wpa_supplicant" "bluez" "bluez-utils" "bluez-libs"
-
-    # Frameworks & Libraries
-    "qt6-base" "qt5-base" "kwayland" "egl-wayland"
-
-    # --- EndeavourOS Utilities ---
-    "welcome" "eos-apps-info" "eos-rankmirrors"
-
-    # --- KDE ---
-    "plasma-desktop" "plasma-workspace" "kwin"
-    "systemsettings" "sddm" "kde-cli-tools" "powerdevil"
-    "polkit-kde-agent" "breeze" "qt6-wayland"
-    "xdg-desktop-portal-kde" "spectacle" "kinfocenter"
-    "plasma-nm" "plasma-pa" "kscreen"
-
-    # --- GNOME ---
-    "gnome-shell" "mutter" "gnome-session"
-    "gnome-control-center" "gnome-settings-daemon"
-    "gdm" "libadwaita" "gtk4" "gtk3"
-    "xdg-desktop-portal-gnome" "gnome-keyring" "nautilus"
-    "gvfs" "xdg-user-dirs-gtk" "gnome-terminal" "console"
-
-    # --- COSMIC ---
-    "cosmic-comp" "cosmic-session" "cosmic-greeter"
-    "cosmic-settings" "cosmic-panel" "cosmic-applets"
-    "cosmic-launcher" "cosmic-workspaces" "cosmic-files"
-    "xdg-desktop-portal-cosmic" "cosmic-notifications"
-    "cosmic-bg" "cosmic-osd" "cosmic-randr" "cosmic-app-library"
-
-    # --- XFCE ---
-    "xfwm4" "xfce4-session" "xfce4-panel"
-    "xfce4-settings" "xfdesktop" "thunar"
-    "libxfce4ui" "exo" "garcon" "xfconf"
-    "xfce4-power-manager" "xfce4-notifyd"
-    "gvfs" "thunar-volman" "polkit-gnome"
-
-    # --- LXQt ---
-    "lxqt-session" "lxqt-panel" "lxqt-globalkeys"
-    "lxqt-notificationd" "lxqt-runner" "pcmanfm-qt"
-    "liblxqt" "lxqt-policykit" "openbox"
-    "xdg-desktop-portal-lxqt" "lxqt-sudo"
-    "gvfs"
-
-    # --- I3 ---
-    "i3-wm" "i3status" "i3lock" "i3blocks"
-    "dmenu" "rofi" "dunst" "picom" "feh"
-    "polkit-gnome" "xorg-server" "xorg-xinit"
-    "network-manager-applet"
-
-    # --- SWAY ---
-    "sway" "swaybg" "swayidle" "swaylock"
-    "wlroots" "xorg-xwayland" "polkit-gnome"
-    "xdg-desktop-portal-wlr" "xdg-desktop-portal-gtk"
-    "dmenu" "grim" "slurp"
-    "mako" "network-manager-applet"
-
-    # --- HYPRLAND ---
-    "hyprland" "hyprland-protocols"
-    "aquamarine" "hyprlang" "hyprcursor" "hyprutils"
-    "xdg-desktop-portal-hyprland" "xdg-desktop-portal-gtk"
-    "hyprlock" "hypridle" "hyprpaper"
-    "qt6-wayland" "qt5-wayland" "kitty"
-    "polkit-gnome" "dunst" "network-manager-applet"
-    "hyprgraphics" "hyprland-qtutils" "hyprland-guiutils"
-
-    # --- CINNAMON ---
-    "cinnamon" "cinnamon-session"
-    "cinnamon-settings-daemon" "cinnamon-control-center"
-    "muffin" "cinnamon-screensaver"
-    "cinnamon-menus" "nemo" "gnome-keyring"
-    "gvfs"
-
-    # --- MATE ---
-    "mate-desktop" "mate-session-manager"
-    "mate-panel" "mate-settings-daemon"
-    "mate-control-center" "marco"
-    "caja" "libmateweather" "mate-polkit"
-    "gvfs"
-
-    # --- LABWC ---
-    "labwc" "labwc-menu-generator"
-    "wlroots" "sfwbar" "kanshi"
-    "waybar" "wlr-randr"
-    "xdg-desktop-portal-wlr"
-    "mako" "polkit-gnome"
-
-    # --- OPENBOX ---
-    "openbox" "obconf" "tint2"
-    "lxappearance" "feh" "picom"
-    "dmenu" "rofi"
-    "polkit-gnome"
-
-    # --- QTILE ---
-    "qtile" "qtile-extras"
-    "python-psutil" "python-iwlib" "python-xdg"
-    "python-pywlroots" "python-cffi" "python-dbus-next"
-    "python-gobject"
-    "polkit-gnome" "dunst" "network-manager-applet"
-    "python-cairocffi" "python-xcffib"
-    "python-pywayland" "python-xkbcommon"
-
-    # --- NIRI ---
-    "niri" "fuzzel" "mako"
-    "xwayland-satellite"
-    "xdg-desktop-portal-gnome"
-    "xdg-desktop-portal-gtk"
-    "polkit-gnome" "network-manager-applet"
-)
+if [[ -f "$USER_PKG_CONF" ]]; then
+    source "$USER_PKG_CONF"
+fi
 
 declare -A NUKE_MAP
 for pkg in "${NUCLEAR_PKGS[@]}"; do NUKE_MAP["$pkg"]=1; done
@@ -425,17 +306,44 @@ refresh_mirrors() {
             fi
         fi
 
+        if command -v cachyos-rate-mirrors &>/dev/null; then
+            echo -e "  ${blue}󰚰  Ranking CachyOS mirrors...${reset}"
+            if sudo cachyos-rate-mirrors; then
+                echo -e "  ${green}  ✔ CachyOS mirrors updated.${reset}"
+            else
+                echo -e "  ${red}  ✘ Failed to rank CachyOS mirrors.${reset}"
+            fi
+        fi
+
         if command -v reflector &>/dev/null; then
             echo -e "\n  ${blue}󰚰  Running reflector for Arch Linux...${reset}"
-            echo -e "  ${dim}  Searching Germany/Netherlands, HTTPS, Age < 6h... (WARNINGS ARE EXPECTED)${reset}"
 
-            if sudo reflector --country Germany,Netherlands --protocol https --age 6 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 5; then
-                echo -e "  ${green}  ✔ Arch mirrors updated successfully.${reset}\n"
-                return 0
-            else
-                echo -e "  ${red}  ✘ Reflector failed (Too strict? Try manual update).${reset}\n"
-                return 1
+            local CUSTOM_REFLECTOR
+            CUSTOM_REFLECTOR=$(grep -v '^#' "$REFL_CONF" 2>/dev/null | grep '[^[:space:]]' | head -n 1)
+            local DEFAULT_REFLECTOR="sudo reflector --country Germany,Netherlands --protocol https --age 6 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 5"
+            local REFL_SUCCESS=false
+
+            if [[ -n "$CUSTOM_REFLECTOR" ]]; then
+                echo -e "  ${dim}  Executing custom reflector command...${reset}"
+                if eval "$CUSTOM_REFLECTOR"; then
+                    echo -e "  ${green}  ✔ Custom Arch mirrors updated successfully.${reset}\n"
+                    REFL_SUCCESS=true
+                else
+                    echo -e "  ${yellow}  ⚠ Custom reflector command failed. Falling back to default...${reset}"
+                fi
             fi
+
+            if ! $REFL_SUCCESS; then
+                echo -e "  ${dim}  Searching Germany/Netherlands, HTTPS, Age < 6h... (WARNINGS ARE EXPECTED)${reset}"
+                if eval "$DEFAULT_REFLECTOR"; then
+                    echo -e "  ${green}  ✔ Arch mirrors updated successfully.${reset}\n"
+                    return 0
+                else
+                    echo -e "  ${red}  ✘ Reflector failed (Too strict? Try manual update).${reset}\n"
+                    return 1
+                fi
+            fi
+            return 0
         else
             echo -e "  ${red}✘ Error: 'reflector' is not installed.${reset}\n"
             return 1
@@ -1091,13 +999,43 @@ if [[ -n "$ignored_updates" ]]; then
 fi
 
 # --- 8. Update Request ---
+check_pending_updates() {
+    local pending
+    pending=$(LC_ALL=C pacman -Qu 2>/dev/null)
+    if [[ -n "$ignored_pkgs" && -n "$pending" ]]; then
+        pending=$(echo "$pending" | awk -v ig="$ignored_pkgs" '
+            BEGIN { split(ig, a, "\n"); for (i in a) if(a[i] != "") ign[a[i]]=1 }
+            { if (!ign[$1]) print $0 }
+        ')
+    fi
+    echo "$pending"
+}
+
+CUSTOM_CMDS=()
+
+if [[ -f "$CMD_CONF" ]]; then
+    while IFS= read -r line; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        if [[ -n "$line" && ! "$line" =~ ^# ]]; then
+            CUSTOM_CMDS+=("$line")
+        fi
+    done < "$CMD_CONF"
+fi
+
 HAS_EOS=false
 HAS_TOPGRADE=false
 
 command -v eos-update &> /dev/null && HAS_EOS=true
 command -v topgrade &> /dev/null && HAS_TOPGRADE=true
 
-if $HAS_EOS && $HAS_TOPGRADE; then
+if [[ ${#CUSTOM_CMDS[@]} -gt 0 ]]; then
+    if [[ ${#CUSTOM_CMDS[@]} -eq 1 ]]; then
+        PROMPT_CMD="${CUSTOM_CMDS[0]}"
+    else
+        PROMPT_CMD="Custom config (${#CUSTOM_CMDS[@]} commands)"
+    fi
+elif $HAS_EOS && $HAS_TOPGRADE; then
     PROMPT_CMD="eos-update && topgrade"
 elif $HAS_EOS; then
     PROMPT_CMD="eos-update"
@@ -1118,17 +1056,38 @@ read -r answer
 
 if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
     echo -e "\n"
-
     backup_pacman_db
-
     UPDATE_SUCCESS=false
 
-    if $HAS_EOS && $HAS_TOPGRADE; then
+    if [[ ${#CUSTOM_CMDS[@]} -gt 0 ]]; then
+        echo -e "${blue}${bold}  󰚰  Running custom update commands...${reset}\n"
+        UPDATE_SUCCESS=true
+
+        for cmd in "${CUSTOM_CMDS[@]}"; do
+            echo -e "  ${dim}➜ Executing: ${white}$cmd${reset}"
+            eval "$cmd"
+            core_exit=$?
+
+            if [[ $core_exit -ne 0 ]]; then
+                UPDATE_SUCCESS=false
+                echo -e "\n${red}  ✘ Command failed with exit code $core_exit: $cmd${reset}"
+                break
+            fi
+        done
+
+        if $UPDATE_SUCCESS; then
+            if [[ -n "$(check_pending_updates)" ]]; then
+                echo -e "\n${yellow}  ⚠ Custom commands finished successfully, but standard pacman updates were skipped.${reset}"
+                echo -e "  ${dim}Make sure your custom commands include a package manager update (e.g., 'paru -Syu').${reset}"
+            fi
+        fi
+
+    elif $HAS_EOS && $HAS_TOPGRADE; then
         echo -e "${blue}${bold}  󰚰  Running eos-update (Keyrings & Packages)...${reset}\n"
         eos-update
         core_exit=$?
 
-        pending_updates=$(LC_ALL=C pacman -Qu 2>/dev/null)
+        pending_updates=$(check_pending_updates)
 
         if [[ -z "$pending_updates" && $core_exit -eq 0 ]]; then
             echo -e "\n${green}✔ Core updates applied successfully.${reset}"
@@ -1139,7 +1098,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             echo -ne "  ${white}Run topgrade anyway? (Flatpaks/AUR etc) [y/N]: ${reset}"
             read -r force_extra
             if [[ "$force_extra" =~ ^[Yy]$ ]]; then
-                topgrade
+                topgrade && UPDATE_SUCCESS=true
             else
                 echo -e "  ${dim}Skipping extra updates.${reset}\n"
             fi
@@ -1148,7 +1107,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
     elif $HAS_EOS; then
         eos-update
         core_exit=$?
-        if [[ $core_exit -eq 0 && -z "$(LC_ALL=C pacman -Qu 2>/dev/null)" ]]; then
+        if [[ $core_exit -eq 0 && -z "$(check_pending_updates)" ]]; then
             UPDATE_SUCCESS=true
         fi
 
@@ -1166,7 +1125,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             core_exit=$?
         fi
 
-        if [[ $core_exit -eq 0 && -z "$(LC_ALL=C pacman -Qu 2>/dev/null)" ]]; then
+        if [[ $core_exit -eq 0 && -z "$(check_pending_updates)" ]]; then
             UPDATE_SUCCESS=true
         fi
     fi
@@ -1180,3 +1139,5 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 else
     echo -e "  ${yellow}Operation cancelled.${reset}\n"
 fi
+
+exit 0
