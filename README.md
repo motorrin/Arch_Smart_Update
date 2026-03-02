@@ -49,7 +49,7 @@ The script recognizes hundreds of packages (from DEs to base system components) 
 
 The script relies on standard system utilities, but make sure you have the following installed:
 
-`sudo pacman -S python bash tar gawk coreutils psmisc`
+`sudo pacman -S curl python bash tar gawk coreutils psmisc`
 
 ## 🛠️ Installation
 
