@@ -124,23 +124,41 @@ NUCLEAR_PKGS=("glibc" "linux" "systemd" "pacman" "nvidia" "mkinitcpio")
 CRITICAL_PKGS=("base" "base-devel" "mesa" "wayland" "xorg-server" "dbus")
 FEATURE_PKGS=("pipewire" "plasma-desktop" "gnome-shell" "hyprland" "networkmanager")
 
+parse_bash_array() {
+    local file=$1
+    local arr_name=$2
+    awk -v var="$arr_name" '
+        BEGIN { in_arr=0 }
+        { gsub(/#.*/, "") }
+        $0 ~ "^"var"(\\+)?=\\s*\\(" { in_arr=1; sub(/^.*\(/, "") }
+        in_arr {
+            while (match($0, /"[^"]+"/)) {
+                print substr($0, RSTART+1, RLENGTH-2)
+                $0 = substr($0, RSTART+RLENGTH)
+            }
+            if ($0 ~ /\)/) in_arr=0
+        }
+    ' "$file"
+}
+
 if [[ -f "$PKG_CONF" ]]; then
-    NUCLEAR_PKGS=($(grep -oP 'NUCLEAR_PKGS=\(\K.*?(?=\))' "$PKG_CONF" | tr -d "\"'"))
-    CRITICAL_PKGS=($(grep -oP 'CRITICAL_PKGS=\(\K.*?(?=\))' "$PKG_CONF" | tr -d "\"'"))
-    FEATURE_PKGS=($(grep -oP 'FEATURE_PKGS=\(\K.*?(?=\))' "$PKG_CONF" | tr -d "\"'"))
+    NUCLEAR_PKGS=($(parse_bash_array "$PKG_CONF" "NUCLEAR_PKGS"))
+    CRITICAL_PKGS=($(parse_bash_array "$PKG_CONF" "CRITICAL_PKGS"))
+    FEATURE_PKGS=($(parse_bash_array "$PKG_CONF" "FEATURE_PKGS"))
 else
     echo -e "${red}  ⚠ Could not load packages.conf. Using built-in basic fallbacks.${reset}"
 fi
 
 if [[ -f "$USER_PKG_CONF" ]]; then
-    NUCLEAR_PKGS+=($(grep -oP 'NUCLEAR_PKGS\+=\(\K.*?(?=\))' "$USER_PKG_CONF" | tr -d "\"'"))
-    CRITICAL_PKGS+=($(grep -oP 'CRITICAL_PKGS\+=\(\K.*?(?=\))' "$USER_PKG_CONF" | tr -d "\"'"))
-    FEATURE_PKGS+=($(grep -oP 'FEATURE_PKGS\+=\(\K.*?(?=\))' "$USER_PKG_CONF" | tr -d "\"'"))
+    NUCLEAR_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "NUCLEAR_PKGS"))
+    CRITICAL_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "CRITICAL_PKGS"))
+    FEATURE_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "FEATURE_PKGS"))
 fi
 
 if [[ -f "$SETTINGS_CONF" ]]; then
-    AUR_HELPER_OVERRIDE=$(grep -oP '^AUR_HELPER_OVERRIDE=\K.*' "$SETTINGS_CONF" | tr -d "\"'")
-    PROMPT_MIRROR_REFRESH=$(grep -oP '^PROMPT_MIRROR_REFRESH=\K.*' "$SETTINGS_CONF" | tr -d "\"'")
+    AUR_HELPER_OVERRIDE=$(grep -oP '^AUR_HELPER_OVERRIDE=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
+    PROMPT_MIRROR_REFRESH=$(grep -oP '^PROMPT_MIRROR_REFRESH=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
+    MAX_BACKUP_COPIES=$(grep -oP '^MAX_BACKUP_COPIES=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
 
     if ! grep -q "AUR_HELPER_OVERRIDE=" "$SETTINGS_CONF"; then
         echo -e "\n# Override the default AUR helper (e.g. \"yay\", \"pikaur\"). Leave empty to auto-detect." >> "$SETTINGS_CONF"
