@@ -91,6 +91,31 @@ update_from_github() {
     fi
 }
 
+validate_user_conf() {
+    local file="$1"
+    local label="$2"
+
+    [[ ! -f "$file" ]] && return 0
+
+    local owner
+    owner=$(stat -Lc '%U' "$file" 2>/dev/null)
+    local real_user="${SUDO_USER:-$(id -un)}"
+    if [[ "$owner" != "$real_user" && "$owner" != "root" ]]; then
+        echo -e "${bg_nuke} ⚠ SECURITY ${reset} ${red}$label is owned by '${owner:-UNKNOWN}', expected '$real_user' or 'root'. Refusing to load.${reset}"
+        return 1
+    fi
+
+    local perms
+    perms=$(stat -Lc '%a' "$file" 2>/dev/null)
+    if (( 8#${perms:-0} & 8#022 )); then
+        echo -e "${bg_nuke} ⚠ SECURITY ${reset} ${red}$label is group/world-writable (${perms}). Refusing to load.${reset}"
+        echo -e "${yellow}  Fix with: chmod 600 \"$file\"${reset}"
+        return 1
+    fi
+
+    return 0
+}
+
 echo -e "${dim}  Checking for configuration updates...${reset}"
 
 update_from_github "$PKG_CONF" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/packages.conf" "NUCLEAR_PKGS"
@@ -100,17 +125,40 @@ update_from_github "$SETTINGS_DEFAULT" "https://raw.githubusercontent.com/motorr
 
 if [[ ! -f "$CMD_CONF" && -f "$CMD_DEFAULT" ]]; then
     cp "$CMD_DEFAULT" "$CMD_CONF"
+    chmod 600 "$CMD_CONF"
     echo -e "${dim}  Created default $CMD_CONF${reset}"
 fi
 
 if [[ ! -f "$REFL_CONF" && -f "$REFL_DEFAULT" ]]; then
     cp "$REFL_DEFAULT" "$REFL_CONF"
+    chmod 600 "$REFL_CONF"
     echo -e "${dim}  Created default $REFL_CONF${reset}"
 fi
 
 if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     cp "$SETTINGS_DEFAULT" "$SETTINGS_CONF"
+    chmod 600 "$SETTINGS_CONF"
     echo -e "${dim}  Created default $SETTINGS_CONF${reset}"
+fi
+
+if ! validate_user_conf "$CMD_CONF" "custom_commands.conf"; then
+    echo -e "${yellow}  ⚠ Custom commands disabled due to security check failure.${reset}"
+    CMD_CONF=""
+fi
+
+if ! validate_user_conf "$REFL_CONF" "reflector.conf"; then
+    echo -e "${yellow}  ⚠ Custom reflector command disabled due to security check failure.${reset}"
+    REFL_CONF=""
+fi
+
+if ! validate_user_conf "$SETTINGS_CONF" "other_settings.conf"; then
+    echo -e "${yellow}  ⚠ Settings disabled due to security check failure.${reset}"
+    SETTINGS_CONF=""
+fi
+
+if ! validate_user_conf "$PKG_CONF" "packages.conf"; then
+    echo -e "${yellow}  ⚠ Packages config disabled due to security check failure.${reset}"
+    PKG_CONF=""
 fi
 
 if [[ ! -f "$USER_PKG_CONF" ]]; then
@@ -125,7 +173,13 @@ if [[ ! -f "$USER_PKG_CONF" ]]; then
 # FEATURE_PKGS+=("my-feature-app")
 
 EOF
+    chmod 600 "$USER_PKG_CONF"
     echo -e "${dim}  Created default user_packages.conf${reset}"
+fi
+
+if ! validate_user_conf "$USER_PKG_CONF" "user_packages.conf"; then
+    echo -e "${yellow}  ⚠ User packages disabled due to security check failure.${reset}"
+    USER_PKG_CONF=""
 fi
 
 NUCLEAR_PKGS=("glibc" "linux" "systemd" "pacman" "nvidia" "mkinitcpio")
@@ -157,13 +211,13 @@ else
     echo -e "${red}  ⚠ Could not load packages.conf. Using built-in basic fallbacks.${reset}"
 fi
 
-if [[ -f "$USER_PKG_CONF" ]]; then
+if [[ -n "$USER_PKG_CONF" && -f "$USER_PKG_CONF" ]]; then
     NUCLEAR_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "NUCLEAR_PKGS"))
     CRITICAL_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "CRITICAL_PKGS"))
     FEATURE_PKGS+=($(parse_bash_array "$USER_PKG_CONF" "FEATURE_PKGS"))
 fi
 
-if [[ -f "$SETTINGS_CONF" ]]; then
+if [[ -n "$SETTINGS_CONF" && -f "$SETTINGS_CONF" ]]; then
     AUR_HELPER_OVERRIDE=$(grep -oP '^AUR_HELPER_OVERRIDE=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
     PROMPT_MIRROR_REFRESH=$(grep -oP '^PROMPT_MIRROR_REFRESH=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
     MAX_BACKUP_COPIES=$(grep -oP '^MAX_BACKUP_COPIES=\K.*' "$SETTINGS_CONF" | tr -d "\"'\r")
@@ -376,8 +430,10 @@ refresh_mirrors() {
         if command -v reflector &>/dev/null; then
             echo -e "\n  ${blue}󰚰  Running reflector for Arch Linux...${reset}"
 
-            local CUSTOM_REFLECTOR
-            CUSTOM_REFLECTOR=$(grep -v '^#' "$REFL_CONF" 2>/dev/null | grep '[^[:space:]]' | head -n 1)
+            local CUSTOM_REFLECTOR=""
+            if [[ -n "$REFL_CONF" && -f "$REFL_CONF" ]]; then
+                CUSTOM_REFLECTOR=$(grep -v '^#' "$REFL_CONF" 2>/dev/null | grep '[^[:space:]]' | head -n 1)
+            fi
             local DEFAULT_REFLECTOR="sudo reflector --country Germany,Netherlands --protocol https --age 6 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 5"
             local REFL_SUCCESS=false
 
@@ -1110,7 +1166,7 @@ check_pending_updates() {
 
 CUSTOM_CMDS=()
 
-if [[ -f "$CMD_CONF" ]]; then
+if [[ -n "$CMD_CONF" && -f "$CMD_CONF" ]]; then
     while IFS= read -r line; do
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
