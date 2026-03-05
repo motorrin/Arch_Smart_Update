@@ -144,7 +144,7 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
 
     setup_ans=""
     for (( i=15; i>0; i-- )); do
-        echo -ne "\r\033[2K  ${white}Allow mirror ranking option before update (with confirmation)?[Y/n] (${i}s): ${reset}"
+        echo -ne "\r\033[2K  ${white}Allow mirror ranking option before update (with confirmation)? [Y/n] (${i}s): ${reset}"
 
         if read -t 1 -n 1 -r setup_ans </dev/tty 2>/dev/null; then
             break
