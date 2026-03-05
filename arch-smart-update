@@ -139,6 +139,20 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     cp "$SETTINGS_DEFAULT" "$SETTINGS_CONF"
     chmod 600 "$SETTINGS_CONF"
     echo -e "${dim}  Created default $SETTINGS_CONF${reset}"
+
+    echo -e "\n${blue}${bold}  [First Run Setup]${reset}"
+    echo -ne "  ${white}Allow mirror ranking option before update (with confirmation)? [Y/n] (15s timeout): ${reset}"
+
+    setup_ans=""
+    read -t 15 -r setup_ans </dev/tty 2>/dev/null || true
+
+    if [[ "$setup_ans" =~ ^[Nn]$ ]]; then
+        sed -i 's/^PROMPT_MIRROR_REFRESH=.*/PROMPT_MIRROR_REFRESH=false/' "$SETTINGS_CONF"
+        echo -e "\n  ${dim}➜ Mirror ranking prompt disabled.${reset}\n"
+    else
+        sed -i 's/^PROMPT_MIRROR_REFRESH=.*/PROMPT_MIRROR_REFRESH=true/' "$SETTINGS_CONF"
+        echo -e "\n  ${dim}➜ Mirror ranking prompt enabled.${reset}\n"
+    fi
 fi
 
 if ! validate_user_conf "$CMD_CONF" "custom_commands.conf"; then
