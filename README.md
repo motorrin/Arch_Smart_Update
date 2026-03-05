@@ -50,7 +50,7 @@ The script recognizes hundreds of packages (from DEs to base system components) 
 
 ## 📁 Configuration & Customization
 
-On its first run, the script creates a configuration folder at `~/.config/arch-smart-update/` and downloads the latest default templates from GitHub, and asks if you prefer to be prompted for mirror ranking before updates.
+On its first run, the script creates a configuration folder at `~/.config/arch-smart-update/`, downloads the latest default templates from GitHub, and asks if you prefer to be prompted for mirror ranking before updates.
 
 To ensure your personal settings are never overwritten by script updates, the configuration is split into two types:
 
