@@ -428,11 +428,54 @@ backup_pacman_db() {
 }
 
 # --- 5. Mirror Refresh Function ---
+get_current_mirror() {
+    local mirror
+    mirror=$(awk -F/ '/^Server[ \t]*=/ {print $3; exit}' /etc/pacman.d/mirrorlist 2>/dev/null)
+    echo "${mirror:-Unknown}"
+}
+
 refresh_mirrors() {
     local reason="${1:-Mirror instability detected (timeouts or errors).}"
 
+    local mirror_list="/etc/pacman.d/mirrorlist"
+    local current_mirror=$(get_current_mirror)
+    local mirror_age="Unknown"
+
+    if [[ -f "$mirror_list" ]]; then
+        local file_ts=$(stat -c %Y "$mirror_list" 2>/dev/null)
+        if [[ -n "$file_ts" ]]; then
+            local now_ts=$(date +%s)
+            local diff_sec=$((now_ts - file_ts))
+
+            if (( diff_sec < 0 )); then
+                mirror_age="just now"
+            else
+                local diff_days=$((diff_sec / 86400))
+                local diff_hours=$(( (diff_sec % 86400) / 3600 ))
+                local diff_mins=$(( (diff_sec % 3600) / 60 ))
+                if (( diff_days > 0 )); then
+                    mirror_age="${diff_days}d ${diff_hours}h ago"
+                elif (( diff_hours > 0 )); then
+                    mirror_age="${diff_hours}h ${diff_mins}m ago"
+                else
+                    mirror_age="${diff_mins}m ago"
+                fi
+            fi
+        fi
+    fi
+
+    local CUSTOM_REFLECTOR=""
+    if [[ -n "$REFL_CONF" && -f "$REFL_CONF" ]]; then
+        CUSTOM_REFLECTOR=$(grep -v '^#' "$REFL_CONF" 2>/dev/null | grep '[^[:space:]]' | head -n 1)
+    fi
+    local DEFAULT_REFLECTOR="sudo reflector --country Germany,Netherlands --protocol https --age 12 --latest 50 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 10"
+    local ACTUAL_CMD="${CUSTOM_REFLECTOR:-$DEFAULT_REFLECTOR}"
+
     echo -e "\n${yellow}${bold}⚠  $reason${reset}"
-    echo -ne "  ${white}Refresh mirrors (DE/NL, HTTPS, <12h)? [Y/n]: ${reset}"
+    echo -e "  ${dim}Current mirror: ${white}$current_mirror${dim} (Last ranked: $mirror_age)${reset}"
+    echo -e "  ${dim}Command: ${white}$ACTUAL_CMD${reset}"
+    echo -e "  ${dim}Can be changed in the reflector.conf file.${reset}"
+    echo -ne "  ${white}Refresh mirrors now? [Y/n]: ${reset}"
     read -r ans
     if [[ "$ans" =~ ^[Yy]$ || -z "$ans" ]]; then
 
@@ -457,17 +500,13 @@ refresh_mirrors() {
         if command -v reflector &>/dev/null; then
             echo -e "\n  ${blue}󰚰  Running reflector for Arch Linux...${reset}"
 
-            local CUSTOM_REFLECTOR=""
-            if [[ -n "$REFL_CONF" && -f "$REFL_CONF" ]]; then
-                CUSTOM_REFLECTOR=$(grep -v '^#' "$REFL_CONF" 2>/dev/null | grep '[^[:space:]]' | head -n 1)
-            fi
-            local DEFAULT_REFLECTOR="sudo reflector --country Germany,Netherlands --protocol https --age 12 --latest 50 --number 20 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 10"
             local REFL_SUCCESS=false
 
             if [[ -n "$CUSTOM_REFLECTOR" ]]; then
                 echo -e "  ${dim}  Executing custom reflector command...${reset}"
                 if bash -c "$CUSTOM_REFLECTOR"; then
-                    echo -e "  ${green}  ✔ Custom Arch mirrors updated successfully.${reset}\n"
+                    local new_mirror=$(get_current_mirror)
+                    echo -e "  ${green}  ✔ Custom Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
                     REFL_SUCCESS=true
                 else
                     echo -e "  ${yellow}  ⚠ Custom reflector command failed. Falling back to default...${reset}"
@@ -475,12 +514,13 @@ refresh_mirrors() {
             fi
 
             if ! $REFL_SUCCESS; then
-                echo -e "  ${dim}  Ranking mirrors (DE/NL, HTTPS, <12h)... WARNINGS ARE EXPECTED.${reset}"
+                echo -e "  ${dim}  Ranking mirrors... WARNINGS ARE EXPECTED.${reset}"
                 if eval "$DEFAULT_REFLECTOR"; then
-                    echo -e "  ${green}  ✔ Arch mirrors updated successfully.${reset}\n"
+                    local new_mirror=$(get_current_mirror)
+                    echo -e "  ${green}  ✔ Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
                     return 0
                 else
-                    echo -e "  ${red}  ✘ Reflector failed (Too strict? Try manual update).${reset}\n"
+                    echo -e "  ${red}  ✘ Reflector failed (Try changing the reflector.conf settings).${reset}\n"
                     return 1
                 fi
             fi
@@ -590,6 +630,8 @@ while (( attempt <= MAX_RETRIES )); do
         IS_DIRTY=0
     fi
 
+    err_count=$(grep -cEi "error|failed|timed out|could not resolve" "$SYNC_LOG" 2>/dev/null || true)
+
     if [[ $PACMAN_EXIT -eq 0 && $IS_DIRTY -eq 0 ]]; then
         break
     else
@@ -598,18 +640,26 @@ while (( attempt <= MAX_RETRIES )); do
                 ((attempt++))
                 log_step "Retrying sync..."
                 continue
-            else
-                if [[ $PACMAN_EXIT -eq 0 ]]; then
-                     echo -e "${yellow}Proceeding despite mirror warnings...${reset}"
-                     break
-                fi
             fi
+        fi
+
+        if (( err_count >= 5 )); then
+            echo -e "\n${yellow}⚠ It seems there are difficulties connecting to mirrors at the moment.${reset}"
+            echo -e "${yellow}This may lead to errors when retrieving updated packages.${reset}"
+            echo -ne "  ${white}Continue anyway? [N/y]: ${reset}"
+            read -r force_cont
+            if [[ ! "$force_cont" =~ ^[Yy]$ ]]; then
+                echo -e "${red}✘ Update aborted by user.${reset}"
+                exit 1
+            fi
+            break
         fi
 
         if [[ $PACMAN_EXIT -ne 0 ]]; then
             echo -e "${red}Error: Could not sync databases.${reset}"
             exit 1
         else
+            echo -e "${yellow}Proceeding despite mirror warnings...${reset}"
             break
         fi
     fi
