@@ -220,7 +220,7 @@ parse_bash_array() {
         { gsub(/#.*/, "") }
         $0 ~ "^"var"(\\+)?=\\s*\\(" { in_arr=1; sub(/^.*\(/, "") }
         in_arr {
-            while (match($0, /"[^"]+"/)) {
+            while (match($0, /"[^"]*"|\047[^\047]*\047/)) {
                 print substr($0, RSTART+1, RLENGTH-2)
                 $0 = substr($0, RSTART+RLENGTH)
             }
@@ -644,7 +644,7 @@ while (( attempt <= MAX_RETRIES )); do
         fi
 
         if (( err_count >= 10 )); then
-            echo -e "\n${yellow}⚠ The selected mirror might not be optimal.${reset}"
+            echo -e "\n${yellow}⚠ Mirror instability detected.${reset}"
             echo -e "${yellow}This may lead to errors when retrieving updated packages.${reset}"
             echo -ne "  ${white}Continue anyway? [N/y]: ${reset}"
             read -r force_cont
@@ -768,13 +768,18 @@ log_step "Fetching remote metadata (pacman -Si)..."
 declare -A NEW_DATA
 
 parse_pacman_si() {
-    awk -F': ' '
-        /^Name/ {n=$2}
-        /^Repository/ {r=$2}
-        /^Build Date/ {b=$2}
-        /^Download Size/ {s=$2}
-        /^Description/ {d=$2; gsub(/[|\t~]/, " ", d)}
-        /^$/ {if (n) {print n "~|~" r "|" b "|" s "|" d; n=""}}
+    awk '
+        /^Name[ \t]*:/ {n=$0; sub(/^[^:]*:[ \t]*/, "", n)}
+        /^Repository[ \t]*:/ {r=$0; sub(/^[^:]*:[ \t]*/, "", r)}
+        /^Build Date[ \t]*:/ {b=$0; sub(/^[^:]*:[ \t]*/, "", b)}
+        /^Download Size[ \t]*:/ {s=$0; sub(/^[^:]*:[ \t]*/, "", s)}
+        /^Description[ \t]*:/ {d=$0; sub(/^[^:]*:[ \t]*/, "", d); gsub(/[|\t~]/, " ", d)}
+        /^$/ {
+            if (n) {
+                print n "~|~" r "|" b "|" s "|" d
+                n=""; r=""; b=""; s=""; d=""
+            }
+        }
         END {if (n) print n "~|~" r "|" b "|" s "|" d}
     '
 }
@@ -793,13 +798,18 @@ if [[ -n "$aur_pkgs" && -n "$AUR_HELPER" ]]; then
         name=${line%%~|~*}
         rest=${line#*~|~}
         NEW_DATA["$name"]="$rest"
-    done < <(echo "$aur_pkgs" | xargs env LC_ALL=C $AUR_HELPER -Si 2>/dev/null | awk -F': ' '
-        /^Name/ {n=$2}
-        /^Repository/ {r="AUR"}
-        /^Last Modified/ {b=$2}
-        /^Description/ {d=$2; gsub(/[|\t~]/, " ", d)}
-        /^$/ {if (n) {print n "~|~" r "|" b "|N/A|" d; n=""}}
-        END {if (n) print n "~|~" r "|" b "|N/A|" d}
+    done < <(echo "$aur_pkgs" | xargs env LC_ALL=C $AUR_HELPER -Si 2>/dev/null | awk '
+        /^Name[ \t]*:/ {n=$0; sub(/^[^:]*:[ \t]*/, "", n)}
+        /^Repository[ \t]*:/ {r="AUR"}
+        /^Last Modified[ \t]*:/ {b=$0; sub(/^[^:]*:[ \t]*/, "", b)}
+        /^Description[ \t]*:/ {d=$0; sub(/^[^:]*:[ \t]*/, "", d); gsub(/[|\t~]/, " ", d)}
+        /^$/ {
+            if (n) {
+                print n "~|~" (r ? r : "AUR") "|" b "|N/A|" d
+                n=""; r=""; b=""; d=""
+            }
+        }
+        END {if (n) print n "~|~" (r ? r : "AUR") "|" b "|N/A|" d}
     ')
 fi
 
@@ -807,26 +817,40 @@ log_step "Fetching local metadata (pacman -Qi)..."
 declare -A OLD_DATA
 while IFS='|' read -r name bdate reason; do
     [[ -z "${OLD_DATA[$name]}" ]] && OLD_DATA["$name"]="$bdate|$reason"
-done < <(echo "$all_pkgs" | xargs env LC_ALL=C pacman -Qi 2>/dev/null | awk -F': ' '
-    /^Name/ {n=$2}
-    /^Build Date/ {b=$2}
-    /^Install Reason/ {r=$2}
-    /^$/ {if (n) print n "|" b "|" r; n=""}
+done < <(echo "$all_pkgs" | xargs env LC_ALL=C pacman -Qi 2>/dev/null | awk '
+    /^Name[ \t]*:/ {n=$0; sub(/^[^:]*:[ \t]*/, "", n)}
+    /^Build Date[ \t]*:/ {b=$0; sub(/^[^:]*:[ \t]*/, "", b)}
+    /^Install Reason[ \t]*:/ {r=$0; sub(/^[^:]*:[ \t]*/, "", r)}
+    /^$/ {
+        if (n) {
+            print n "|" b "|" r
+            n=""; b=""; r=""
+        }
+    }
+    END {if (n) print n "|" b "|" r}
 ')
 
-total_download_size="0 MiB"
+total_download_size="0.00 MiB"
 if [[ -n "$repo_pkgs" ]]; then
     total_download_size=$(echo "$repo_pkgs" | xargs env LC_ALL=C pacman -Si --dbpath "$CHECK_DB" 2>/dev/null | awk '
-        /^Download Size/ {
-            val=$4
-            unit=$5
+        /^Download Size[ \t]*:/ {
+            sub(/^[^:]*:[ \t]*/, "")
+
+            val = $1
+            unit = $2
+
             if (unit == "KiB") val /= 1024
             else if (unit == "GiB") val *= 1024
+            else if (unit == "B") val /= (1024 * 1024)
+
             sum += val
         }
         END {
-            if (sum > 1024) printf "%.2f GiB", sum/1024
-            else printf "%.2f MiB", sum
+            if (sum >= 1024) {
+                printf "%.2f GiB", sum / 1024
+            } else {
+                printf "%.2f MiB", sum + 0
+            }
         }
     ')
 fi
