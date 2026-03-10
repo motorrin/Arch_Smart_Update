@@ -643,7 +643,7 @@ while (( attempt <= MAX_RETRIES )); do
             fi
         fi
 
-        if (( err_count >= 10 )); then
+        if (( err_count >= 15 )); then
             echo -e "\n${yellow}⚠ The selected mirror might not be optimal.${reset}"
             echo -e "${yellow}This may lead to errors when retrieving updated packages.${reset}"
             echo -ne "  ${white}Continue anyway? [N/y]: ${reset}"
