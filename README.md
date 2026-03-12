@@ -102,23 +102,27 @@ If you installed Manually, the command is:
 
 ## ⌨️ Why write so many letters? Create an alias!
 
-### 1. Check if you're using bash or zsh:
-`echo $0`
+### 1. Check which shell you are using:
+`echo $SHELL`
 
 ### 2. Open your configuration file:
 For bash:  
 `nano ~/.bashrc`  
 For zsh:  
-`nano ~/.zshrc`
+`nano ~/.zshrc`  
+For fish:  
+`nano ~/.config/fish/config.fish`
 
 ### 3. Add the alias to the very end of the file:
 If you installed via AUR:  
 `alias up="arch-smart-update"`  
 If you installed Manually:  
-`alias up="~/arch-smart-update"`
+`alias up="$HOME/arch-smart-update"`
 
 ### 4. Apply the changes immediately:
 For bash:  
 `source ~/.bashrc`  
 For zsh:  
-`source ~/.zshrc`
+`source ~/.zshrc`  
+For fish:  
+`source ~/.config/fish/config.fish`
