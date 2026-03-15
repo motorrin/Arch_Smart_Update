@@ -30,7 +30,8 @@
 - **🔒 Intelligent Lock File Removal:** Detects a stale `/var/lib/pacman/db.lck` file and uses `fuser` to check if a package manager is actually running. If it's a phantom lock, the script safely removes it for you.
 - **🚨 IgnorePkg Conflict Checker:** If you have frozen packages via `pacman.conf`, the script simulates the update in the background and warns you of any dependency breakages caused by skipped packages.
 - **🧩 Seamless Ecosystem Integration:** Full, native support for AUR helpers (`yay`, `paru`), as well as synergy with `eos-update` and `topgrade` to handle your Flatpaks, firmwares, and dotfiles.
-- **🎛️ Smart Configuration Management:** The script separates upstream default configurations from your personal overrides. Your custom commands, mirror settings, and specific critical packages are stored safely in ~/.config/arch-smart-update/ and will never be overwritten when the script updates its internal package lists from GitHub.
+- **👻 Background Daemon & Notifications:** Run the script in the background using a user systemd timer. It silently checks for updates using `fakeroot` (no sudo required) and sends desktop notifications via `libnotify` when safe updates are ready or critical Arch News drops.
+- **🎛️ Unified Configuration Management:** All custom commands, mirror overrides, behavior settings, and user package arrays are securely parsed from a single `settings.conf` file. Your personal settings are isolated from upstream defaults and will never be overwritten during script updates.
 
 ---
 
@@ -61,13 +62,13 @@ To ensure your personal settings are never overwritten by script updates, the co
 - `*.default.conf` — Templates showing the latest recommended syntax.
 
 **2. User Managed (Safe from overwrites):**
-- `user_packages.conf` — Add your own packages to the threat levels here. For example: `CRITICAL_PKGS+=("my-important-app")`.
-- `custom_commands.conf` — Define custom update commands (e.g., `flatpak update -y`). If populated, the script will run these *instead* of standard pacman/topgrade utilities.
-- `reflector.conf` — Your custom `reflector` command for generating mirrorlists.
-- `other_settings.conf` — General script behavior settings. Here you can configure:
-  - `PROMPT_MIRROR_REFRESH` (Set to `true` to always ask for a mirror refresh before checking updates).
-  - `MAX_BACKUP_COPIES` (Adjust how many Pacman DB `.tar.gz` backups are kept, default is 5).
-  - `AUR_HELPER_OVERRIDE` (Force the script to use a specific AUR helper like `pikaur` or `paru` instead of auto-detecting).
+- `settings.conf` — Your master configuration file. Here you can configure:
+  - **General Settings:** `PROMPT_MIRROR_REFRESH`, `MAX_BACKUP_COPIES`, `AUR_HELPER_OVERRIDE`.
+  - **Daemon & Logging:** Configure `ENABLE_BACKGROUND_CHECK`, systemd timer intervals, and `GENERATE_LOGS`.
+  - **Overrides:** Define a `CUSTOM_REFLECTOR_CMD` or define `CUSTOM_CMDS` (e.g., `flatpak update -y`) to run instead of the standard utilities.
+  - **User Packages:** Add your own apps to the arrays (e.g., `USER_CRITICAL_PKGS=("my-important-app")`) to integrate them into the Advisor's threat levels.
+
+*(Note: If you are upgrading from a pre-3.0 version, the script features an automated migration tool that will seamlessly merge your old fragmented files into the new `settings.conf` on its first run).*
 
 Whenever the master configuration on GitHub is updated, the script will quietly pull the changes without touching your custom files!
 
@@ -78,6 +79,10 @@ The script relies on standard system utilities, but make sure you have the follo
 `sudo pacman -S curl python bash tar gawk coreutils psmisc`
 
 *(Note: The `python` package provides `python3` for the Arch News RSS check, and `psmisc` provides the `fuser` command required for smart lock file management).*
+
+**Optional Dependencies:**
+- `base-devel` (specifically `fakeroot`) — Required for the background daemon to sync databases without sudo privileges.
+- `libnotify` — Required for desktop notifications in daemon mode.
 
 ## 🛠️ Installation
 
