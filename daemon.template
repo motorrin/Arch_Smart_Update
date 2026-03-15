@@ -10,6 +10,8 @@ After=network-online.target graphical-session.target
 
 [Service]
 Type=oneshot
+Environment="DISPLAY=:0"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
 ExecStart=__SCRIPT_PATH__ --daemon
 IOSchedulingClass=idle
 CPUSchedulingPolicy=idle
