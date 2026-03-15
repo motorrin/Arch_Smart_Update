@@ -1,0 +1,21 @@
+[Unit]
+Description=Arch Smart Update Background Checker
+After=network-online.target graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=__SCRIPT_PATH__ --daemon
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+[TimerTemplate]
+[Unit]
+Description=Check for Arch updates every __CHECK_INTERVAL__
+
+[Timer]
+OnBootSec=__START_DELAY__
+OnUnitActiveSec=__CHECK_INTERVAL__
+Persistent=true
+
+[Install]
+WantedBy=timers.target
