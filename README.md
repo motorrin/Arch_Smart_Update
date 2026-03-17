@@ -100,7 +100,7 @@ For paru:
 `paru -S arch-smart-update`
 
 ## Option 2: Manual Installation
-If you prefer not to use the AUR, you can install the script manually:
+If you are going to install the script manually, keep in mind that you will also have to manually download new versions to ensure stability:
 
 1. `cd ~`  
 2. `curl -O https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/arch-smart-update`  
