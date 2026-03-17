@@ -103,8 +103,8 @@ For paru:
 If you are going to install the script manually, keep in mind that you will also have to manually download new versions to ensure stability:
 
 1. `cd ~`  
-2. `curl -O https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/arch-smart-update`  
-3. `chmod +x arch-smart-update`
+2. `curl -O https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/arch-smart-update.sh`  
+3. `chmod +x arch-smart-update.sh`
 
 ## ❓ How do I use this script?
 
@@ -112,7 +112,7 @@ If you installed via AUR, the command is globally available as:
 `arch-smart-update`
 
 If you installed Manually, the command is:  
-`~/arch-smart-update`
+`~/arch-smart-update.sh`
 
 ## ⌨️ Why write so many letters? Create an alias!
 
@@ -133,7 +133,7 @@ If you installed via AUR:
 `alias up="arch-smart-update"`
 
 If you installed Manually:  
-`alias up="$HOME/arch-smart-update"`
+`alias up="$HOME/arch-smart-update.sh"`
 
 ### 4. Apply the changes immediately:
 
