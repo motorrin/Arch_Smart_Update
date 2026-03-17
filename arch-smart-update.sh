@@ -931,7 +931,10 @@ while (( attempt <= MAX_RETRIES )); do
         fi
 
         if (( err_count >= 15 )); then
-            if $DAEMON_MODE; then exit 1; fi
+            if $DAEMON_MODE; then
+                echo "Network/Mirror error in background mode. Retrying next cycle."
+                exit 0
+            fi
             echo -e "\n${yellow}The selected mirror might not be optimal.${reset}"
             echo -ne "${white}Continue anyway? [y/N]: ${reset}"
             read -r force_cont
