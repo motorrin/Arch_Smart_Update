@@ -169,9 +169,11 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     echo -e "\n${blue}${bold}[First Run Setup]${reset}"
     setup_ans="Y"
     daemon_ans="N"
+    clean_ans="N"
 
     prompt_with_timeout "Allow mirror ranking option before update (with confirmation)?" "Y/n" 15 setup_ans
     prompt_with_timeout "Enable background update checker?" "y/N" 15 daemon_ans
+    prompt_with_timeout "Enable automatic post-update system cleanup?" "y/N" 15 clean_ans
 
     echo ""
 
@@ -194,6 +196,14 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     else
         sed -i 's/^ENABLE_BACKGROUND_CHECK=.*/ENABLE_BACKGROUND_CHECK=false/' "$SETTINGS_CONF"
         echo -e "${dim}Background checker disabled.${reset}\n"
+    fi
+
+    if [[ "$clean_ans" =~ ^[Yy]$ ]]; then
+        sed -i 's/^ENABLE_POST_CLEANUP=.*/ENABLE_POST_CLEANUP=true/' "$SETTINGS_CONF"
+        echo -e "${dim}Post-update cleanup enabled.${reset}\n"
+    else
+        sed -i 's/^ENABLE_POST_CLEANUP=.*/ENABLE_POST_CLEANUP=false/' "$SETTINGS_CONF"
+        echo -e "${dim}Post-update cleanup disabled.${reset}\n"
     fi
 fi
 
@@ -226,7 +236,7 @@ if [[ -n "$SETTINGS_CONF" && -f "$SETTINGS_CONF" ]]; then
         [[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:-1}"
 
         case "$key" in
-            AUR_HELPER_OVERRIDE|PROMPT_MIRROR_REFRESH|MAX_BACKUP_COPIES|CHECK_INTERVAL|START_DELAY|ENABLE_BACKGROUND_CHECK|T_MIRROR_H|T_FEAT_H|T_CRIT_H|T_DE_H|T_NUKE_H|IGNORE_PATCH_TIMERS|GENERATE_LOGS|MAX_LOG_NUMBERS|CUSTOM_REFLECTOR_CMD)
+            AUR_HELPER_OVERRIDE|PROMPT_MIRROR_REFRESH|MAX_BACKUP_COPIES|CHECK_INTERVAL|START_DELAY|ENABLE_BACKGROUND_CHECK|T_MIRROR_H|T_FEAT_H|T_CRIT_H|T_DE_H|T_NUKE_H|IGNORE_PATCH_TIMERS|GENERATE_LOGS|MAX_LOG_NUMBERS|CUSTOM_REFLECTOR_CMD|ENABLE_POST_CLEANUP)
                 declare -g "$key=$val" ;;
         esac
     done < "$SETTINGS_CONF"
@@ -250,6 +260,7 @@ if [[ -n "$SETTINGS_CONF" && -f "$SETTINGS_CONF" ]]; then
 fi
 
 : ${ENABLE_BACKGROUND_CHECK:=false}
+: ${ENABLE_POST_CLEANUP:=false}
 : ${CHECK_INTERVAL:=30min}
 : ${START_DELAY:=5min}
 : ${GENERATE_LOGS:=false}
@@ -541,13 +552,13 @@ except Exception:
                             local wait_script
                             wait_script=$(cat <<EOF
 $(declare -f launch_detached)
-action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
-if [[ "\$action" == "default" ]]; then
+action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+if [[ "\$action" == "read" ]]; then
     launch_detached xdg-open "https://archlinux.org/"
 fi
 EOF
 )
-                            launch_detached bash -c "$wait_script"
+                            nohup bash -c "$wait_script" >/dev/null 2>&1 &
                         else
                             notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" \
                                 "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating."
@@ -600,7 +611,13 @@ get_current_mirror() {
 
 launch_detached() {
     if [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
-        systemd-run --user --quiet --collect "$@"
+        local env_args=()
+        [[ -n "$DISPLAY" ]] && env_args+=("-E" "DISPLAY=$DISPLAY")
+        [[ -n "$WAYLAND_DISPLAY" ]] && env_args+=("-E" "WAYLAND_DISPLAY=$WAYLAND_DISPLAY")
+        [[ -n "$XAUTHORITY" ]] && env_args+=("-E" "XAUTHORITY=$XAUTHORITY")
+        [[ -n "$DBUS_SESSION_BUS_ADDRESS" ]] && env_args+=("-E" "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS")
+
+        systemd-run --user --quiet --collect "${env_args[@]}" "$@"
     elif command -v setsid >/dev/null 2>&1; then
         setsid -f "$@" >/dev/null 2>&1
     else
@@ -1541,13 +1558,13 @@ if [[ "$DAEMON_MODE" == true ]]; then
 export TERMINAL="$TERMINAL"
 export SCRIPT_BIN="$(realpath "$(command -v "$0" || echo "$0")")"
 $(declare -f launch_detached launch_updater_gui)
-action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
-if [[ "\$action" == "default" ]]; then
+action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+if [[ "\$action" == "update" ]]; then
     launch_updater_gui
 fi
 EOF
 )
-                launch_detached bash -c "$wait_script"
+                nohup bash -c "$wait_script" >/dev/null 2>&1 &
             else
                 notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" \
                     "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install."
@@ -1791,7 +1808,38 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             systemctl --user restart arch-smart-update.timer >/dev/null 2>&1
         fi
 
-        echo -e "\n${green}Update process finished successfully.${reset}\n"
+        echo -e "\n${green}Update process finished successfully.${reset}"
+
+        if [[ "${ENABLE_POST_CLEANUP,,}" == "true" ]]; then
+            echo -e "\n${blue}${bold}Performing post-update system cleanup...${reset}"
+
+            local orphans
+            orphans=$(pacman -Qdtq 2>/dev/null)
+            if [[ -n "$orphans" ]]; then
+                echo -e "${dim}Removing orphaned packages...${reset}"
+                echo "$orphans" | xargs -r -o sudo pacman -Rns
+            else
+                echo -e "${dim}No orphaned packages to remove.${reset}"
+            fi
+
+            echo -e "${dim}Clearing partial downloads and package cache...${reset}"
+            sudo rm -rf /var/cache/pacman/pkg/download-* 2>/dev/null
+            if [[ -n "$AUR_HELPER" ]]; then
+                $AUR_HELPER -Sc --noconfirm >/dev/null 2>&1
+            else
+                sudo pacman -Sc --noconfirm >/dev/null 2>&1
+            fi
+
+            echo -e "${dim}Vacuuming systemd journal (keeping 100M)...${reset}"
+            sudo journalctl --vacuum-size=100M >/dev/null 2>&1
+
+            echo -e "${dim}Clearing user thumbnail cache...${reset}"
+            rm -rf ~/.cache/thumbnails/* 2>/dev/null
+
+            echo -e "${green}System cleanup complete!${reset}\n"
+        else
+            echo ""
+        fi
     else
         echo -e "\n${red}Update process completed with errors, partial updates, or was cancelled.${reset}\n"
     fi
