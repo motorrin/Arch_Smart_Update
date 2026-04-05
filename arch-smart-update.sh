@@ -533,7 +533,7 @@ except Exception:
 
         if (( diff_hours < 336 )); then # 14 days
             echo -e "\r\033[2K${red}${bold}WARNING: Fresh Arch News detected ($diff_hours h ago)!${reset}"
-            echo -e "${red}Check https://archlinux.org/ before updating.${reset}\n"
+            echo -e "${red}Check https://archlinux.org/ before updating.${reset}"
 
             if [[ "$DAEMON_MODE" == true ]]; then
                 NEWS_CACHE="${XDG_RUNTIME_DIR:-/tmp}/arch-smart-update-news-cache-${USER:-$(id -un)}"
@@ -565,10 +565,10 @@ EOF
                 fi
             fi
         else
-            echo -e "\r\033[2K${green}No fresh Arch News (last: ${diff_hours}h ago).${reset}\n"
+            echo -e "\r\033[2K${green}No fresh Arch News (last: ${diff_hours}h ago).${reset}"
         fi
     else
-        echo -e "\r\033[2K${dim}Could not check Arch News (Connection or XML error).${reset}\n"
+        echo -e "\r\033[2K${dim}Could not check Arch News (Connection or XML error).${reset}"
     fi
 }
 
