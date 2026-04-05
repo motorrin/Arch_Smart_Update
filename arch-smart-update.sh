@@ -40,15 +40,12 @@ if [[ "$1" == "--daemon" || "$1" == "--check" ]]; then
 fi
 
 # --- 1.4 Helper: Prompt ---
-prompt_with_timeout() {
-    local msg="$1" options="$2" timeout_sec="$3" var_name="$4"
+prompt_user() {
+    local msg="$1" options="$2" var_name="$3"
     local user_input=""
     if ! $DAEMON_MODE; then
-        for (( i=timeout_sec; i>0; i-- )); do
-            echo -ne "\r\033[2K${white}${msg} [${options}] (${i}s): ${reset}"
-            if read -t 1 -n 1 -r user_input </dev/tty 2>/dev/null; then break; else (( $? != 142 )) && break; fi
-        done
-        echo ""
+        echo -ne "${white}${msg} [${options}]: ${reset}"
+        read -r user_input </dev/tty
     fi
     [[ -n "$user_input" ]] && declare -g "$var_name=$user_input"
 }
@@ -171,9 +168,9 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     daemon_ans="N"
     clean_ans="N"
 
-    prompt_with_timeout "Allow mirror ranking option before update (with confirmation)?" "Y/n" 15 setup_ans
-    prompt_with_timeout "Enable background update checker?" "y/N" 15 daemon_ans
-    prompt_with_timeout "Enable automatic post-update system cleanup?" "y/N" 15 clean_ans
+    prompt_user "Allow mirror ranking option before update (with confirmation)?" "Y/n" setup_ans
+    prompt_user "Enable background update checker?" "y/N" daemon_ans
+    prompt_user "Enable automatic post-update system cleanup?" "y/N" clean_ans
 
     echo ""
 
