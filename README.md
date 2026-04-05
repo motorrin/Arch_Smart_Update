@@ -18,9 +18,12 @@
 ![02](https://github.com/user-attachments/assets/bed32c77-38d2-4a8f-a017-35fc3099d786)
 
 ---
+
 ## Daemon preview (optional, can be activated on first launch)
 
-![03](https://github.com/user-attachments/assets/011b26bf-58c7-4635-bd1c-70a06e133f85)
+![03](https://github.com/user-attachments/assets/5822997c-5cc7-4e6e-9338-4eedc3af17aa)
+
+![04](https://github.com/user-attachments/assets/b63b8100-091d-42fa-b6c5-6afe0cce7fd6)
 
 ---
 
