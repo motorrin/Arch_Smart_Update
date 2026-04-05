@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/a4c7914d-a5c0-4834-86a7-b05aacde33d4" width="15%" />
+</div>
+
 ![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
 ![CachyOS](https://img.shields.io/badge/OS-CachyOS-008B8B?style=for-the-badge&logo=linux&logoColor=white)
 ![EndeavourOS](https://img.shields.io/badge/OS-EndeavourOS-7F3F98?style=for-the-badge&logo=endeavouros&logoColor=white)
