@@ -1,6 +1,5 @@
 <div align="center">
   <img src="https://github.com/user-attachments/assets/a4c7914d-a5c0-4834-86a7-b05aacde33d4" width="15%" />
-</div>
 
 ![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
 ![CachyOS](https://img.shields.io/badge/OS-CachyOS-008B8B?style=for-the-badge&logo=linux&logoColor=white)
@@ -9,6 +8,9 @@
 ![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
 **Tired of blindly running `pacman -Syu` and crossing your fingers that your system doesn't break?**
+<br>
+
+## 🚀 [**JUMP STRAIGHT TO INSTALLATION**](#installation) 🚀
 
 </div>
 
@@ -35,14 +37,15 @@
 
 - **⚡ Safe RAM-Based Sync (`/tmp`):** The script never touches your live local pacman database during the checking phase. All database syncing and calculations are done in an isolated temporary directory in your RAM (`/tmp/checkupdates-db...`). This 100% prevents catastrophic "partial upgrade" scenarios if you decide to cancel the update.
 - **🧠 Smart Update Advisor:** Automatically analyzes the criticality of pending packages. If a system-crashing update (like the Linux kernel, `glibc`, or NVIDIA drivers) was released less than 24 hours ago, the script strongly advises you to wait, ensuring upstream stability before you apply it.
-- **📰 Arch News Integration (RSS):** Fetches the latest official Arch Linux news feed. If there’s a recent post requiring manual intervention, you'll get a bright warning before you press "Y".
+- **📰 Arch News Integration (RSS):** Fetches the latest official Arch Linux news feed. If there’s a recent post requiring manual intervention, you'll get a bright warning before you press "Y". 
 - **🛡️ Automated Pacman DB Backups:** Automatically creates a `.tar.gz` backup of your `/var/lib/pacman/local` database before applying any changes. It keeps the last 5 copies so you can always roll back seamlessly.
 - **🚀 Smart Mirror Management:** Monitors your mirrorlist age and sync speeds. If mirrors are older than 7 days or time out, it detects the instability and offers to automatically refresh them via `reflector`, `eos-rankmirrors`, or `cachyos-rate-mirrors`.
 - **📊 Rich CLI Analytics:** Displays a beautifully formatted, color-coded terminal table showing update types (MAJOR, MINOR, PATCH, CALVER, EPOCH), package age in hours, download sizes, repositories, and descriptions.
 - **🔒 Intelligent Lock File Removal:** Detects a stale `/var/lib/pacman/db.lck` file and uses `fuser` to check if a package manager is actually running. If it's a phantom lock, the script safely removes it for you.
 - **🚨 IgnorePkg Conflict Checker:** If you have frozen packages via `pacman.conf`, the script simulates the update in the background and warns you of any dependency breakages caused by skipped packages.
+- **🧹 Automated System Cleanup:** Optional post-update cleanup that safely removes orphaned packages, clears partial downloads, empties the pacman/AUR cache, vacuums the systemd journal (keeping 100M), and clears user thumbnail caches.
 - **🧩 Seamless Ecosystem Integration:** Full, native support for AUR helpers (`yay`, `paru`), as well as synergy with `eos-update` and `topgrade` to handle your Flatpaks, firmwares, and dotfiles.
-- **👻 Background Daemon & Notifications:** You can allow the script to run in the background using a user systemd timer. It silently checks for updates using `fakeroot` (no sudo required) and sends desktop notifications via `libnotify` only when safe updates are ready or critical Arch News drops. It **won't alert you** if available updates are considered unsafe by the algorithm or if the update list hasn't changed since the last check.
+- **👻 Background Daemon & Notifications:** You can allow the script to run in the background using a user systemd timer. It silently checks for updates using `fakeroot` (no sudo required) and sends interactive desktop notifications via `libnotify`. Features a smart 3-notification limit for Arch News to prevent spam.
 - **🎛️ Unified Configuration Management:** All custom commands, mirror overrides, behavior settings, and user package arrays are securely parsed from a single `settings.conf` file. Your personal settings are isolated from upstream defaults and will never be overwritten during script updates.
 
 ---
@@ -65,7 +68,7 @@ The script recognizes hundreds of packages (from DEs to base system components) 
 
 ## 📁 Configuration & Customization
 
-On its first run, the script creates a configuration folder at `~/.config/arch-smart-update/`, downloads the latest default templates from GitHub, and asks if you prefer to be prompted for mirror ranking before updates.
+On its first run, the script creates a configuration folder at `~/.config/arch-smart-update/`, downloads the latest default templates from GitHub, and helps you set up standard features. Whenever you launch the script manually, it will display the exact path to your active configuration file at the very top.
 
 To ensure your personal settings are never overwritten by script updates, the configuration is split into two types:
 
@@ -75,7 +78,7 @@ To ensure your personal settings are never overwritten by script updates, the co
 
 **2. User Managed (Safe from overwrites):**
 - `settings.conf` — Your master configuration file. Here you can configure:
-  - **General Settings:** `PROMPT_MIRROR_REFRESH`, `MAX_BACKUP_COPIES`, `AUR_HELPER_OVERRIDE`.
+  - **General Settings:** `PROMPT_MIRROR_REFRESH`, `MAX_BACKUP_COPIES`, `AUR_HELPER_OVERRIDE`, `ENABLE_POST_CLEANUP`.
   - **Daemon & Logging:** Configure `ENABLE_BACKGROUND_CHECK`, systemd timer intervals, and `GENERATE_LOGS`.
   - **Overrides:** Define a `CUSTOM_REFLECTOR_CMD` or define `CUSTOM_CMDS` (e.g., `flatpak update -y`) to run instead of the standard utilities.
   - **User Packages:** Add your own apps to the arrays (e.g., `USER_CRITICAL_PKGS=("my-important-app")`) to integrate them into the Advisor's threat levels.
@@ -96,6 +99,7 @@ The script relies on standard system utilities, but make sure you have the follo
 - `base-devel` (specifically `fakeroot`) — Required for the background daemon to sync databases without sudo privileges.
 - `libnotify` — Required for desktop notifications in daemon mode.
 
+<a name="installation"></a>
 ## 🛠️ Installation
 
 ## Option 1: Install from AUR (Recommended)
@@ -165,7 +169,7 @@ AUR:
 Manual *(if you downloaded it to a different folder, change the path accordingly)*:  
 `rm ~/arch-smart-update.sh`
 
-### 3. Remove configuration files, logs, and icon.
+### 3. Remove configuration files, logs, news cache, and icon:
 
 `rm -rf ~/.config/arch-smart-update`
 
@@ -179,9 +183,9 @@ Manual *(if you downloaded it to a different folder, change the path accordingly
 
 `sudo rm -f /var/lib/pacman/backup/pacman_database_*.tar.gz`
 
-### 6. Clear temporary cache files in RAM:
+### 6. Clear temporary update cache files in RAM:
 
-`rm -f ${XDG_RUNTIME_DIR:-/tmp}/arch-smart-update-*-cache-*`
+`rm -f ${XDG_RUNTIME_DIR:-/tmp}/arch-smart-update-notify-cache-*`
 
 ### 7. Clear AUR helper build cache (if installed via AUR):
 
