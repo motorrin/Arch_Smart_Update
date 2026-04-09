@@ -14,12 +14,11 @@ if [ -t 1 ]; then
     white='\033[38;5;255m'
     gray='\033[38;5;244m'
     bg_crit='\033[48;5;160;38;5;255;1m'
-    bg_core='\033[48;5;237;38;5;214;1m'
     bg_nuke='\033[48;5;196;38;5;255;1m'
     bg_feat='\033[48;5;214;38;5;0;1m'
 else
     reset='' bold='' dim='' red='' green='' yellow='' blue=''
-    magenta='' cyan='' white='' gray='' bg_crit='' bg_core='' bg_nuke='' bg_feat=''
+    magenta='' cyan='' white='' gray='' bg_crit='' bg_nuke='' bg_feat=''
 fi
 
 # --- 1.2 Dependency Check ---
@@ -69,7 +68,8 @@ update_from_github() {
     local file_path="$1"
     local url="$2"
     local expected_string="$3"
-    local filename=$(basename "$file_path")
+    local filename
+    filename=$(basename "$file_path")
     local tmp_file
     tmp_file=$(mktemp "/tmp/${filename}.XXXXXX")
 
@@ -261,18 +261,18 @@ if [[ -n "$SETTINGS_CONF" && -f "$SETTINGS_CONF" ]]; then
     [[ "$T_NUKE_H" =~ ^[0-9]+$ ]] || T_NUKE_H=24
 fi
 
-: ${ENABLE_BACKGROUND_CHECK:=false}
-: ${ENABLE_POST_CLEANUP:=false}
-: ${CHECK_INTERVAL:=30min}
-: ${START_DELAY:=5min}
-: ${GENERATE_LOGS:=false}
-: ${MAX_LOG_NUMBERS:=5}
-: ${T_MIRROR_H:=3}
-: ${T_FEAT_H:=6}
-: ${T_CRIT_H:=12}
-: ${T_DE_H:=12}
-: ${T_NUKE_H:=24}
-: ${IGNORE_PATCH_TIMERS:=true}
+: "${ENABLE_BACKGROUND_CHECK:=false}"
+: "${ENABLE_POST_CLEANUP:=false}"
+: "${CHECK_INTERVAL:=30min}"
+: "${START_DELAY:=5min}"
+: "${GENERATE_LOGS:=false}"
+: "${MAX_LOG_NUMBERS:=5}"
+: "${T_MIRROR_H:=3}"
+: "${T_FEAT_H:=6}"
+: "${T_CRIT_H:=12}"
+: "${T_DE_H:=12}"
+: "${T_NUKE_H:=24}"
+: "${IGNORE_PATCH_TIMERS:=true}"
 
 declare -A NUKE_MAP
 for pkg in "${NUCLEAR_PKGS[@]}"; do NUKE_MAP["$pkg"]=1; done
@@ -316,8 +316,10 @@ sync_daemon_state() {
         mkdir -p "$SYSTEMD_USER_DIR"
 
         if [[ -f "$DAEMON_TEMPLATE" ]]; then
-            local SCRIPT_PATH=$(realpath "$(command -v "$0" || echo "$0")")
-            local TMP_SVC=$(mktemp) TMP_TMR=$(mktemp)
+            local SCRIPT_PATH TMP_SVC TMP_TMR
+            SCRIPT_PATH=$(realpath "$(command -v "$0" || echo "$0")")
+            TMP_SVC=$(mktemp)
+            TMP_TMR=$(mktemp)
 
             export SCRIPT_PATH START_DELAY CHECK_INTERVAL
             awk -v svc="$TMP_SVC" -v tmr="$TMP_TMR" '
@@ -367,7 +369,7 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
     LOG_DIR="$CONFIG_DIR/logs"
     mkdir -p "$LOG_DIR"
 
-    latest_log=$(ls -1 "$LOG_DIR"/log_* 2>/dev/null | grep -E 'log_[0-9]+$' | sort -V | tail -n 1)
+    latest_log=$(find "$LOG_DIR" -maxdepth 1 -name 'log_*' 2>/dev/null | grep -E 'log_[0-9]+$' | sort -V | tail -n 1)
     if [[ -z "$latest_log" ]]; then
         next_num=1
     else
@@ -378,11 +380,13 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
     printf -v log_name "log_%06d" "$next_num"
     LOG_FILE="$LOG_DIR/$log_name"
 
-    echo "=======================================================================" > "$LOG_FILE"
-    echo "Arch Smart Update Log" >> "$LOG_FILE"
-    echo "Time: $(date +'%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
-    echo "Mode: $(if $DAEMON_MODE; then echo "Daemon (Background)"; else echo "Interactive"; fi)" >> "$LOG_FILE"
-    echo "=======================================================================" >> "$LOG_FILE"
+    {
+        echo "======================================================================="
+        echo "Arch Smart Update Log"
+        echo "Time: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "Mode: $(if $DAEMON_MODE; then echo "Daemon (Background)"; else echo "Interactive"; fi)"
+        echo "======================================================================="
+    } > "$LOG_FILE"
 
     if $DAEMON_MODE; then
         exec >> "$LOG_FILE" 2>&1
@@ -390,7 +394,7 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
         exec > >(tee -a "$LOG_FILE") 2>&1
     fi
 
-    existing_logs=( $(ls -1 "$LOG_DIR"/log_[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null | sort -V) )
+    mapfile -t existing_logs < <(find "$LOG_DIR" -maxdepth 1 -name 'log_[0-9][0-9][0-9][0-9][0-9][0-9]' 2>/dev/null | sort -V)
     if (( ${#existing_logs[@]} > MAX_LOG_NUMBERS )); then
         remove_count=$(( ${#existing_logs[@]} - MAX_LOG_NUMBERS ))
         for (( i=0; i<remove_count; i++ )); do
@@ -409,6 +413,7 @@ if ! CHECK_DB=$(mktemp -d /tmp/checkupdates-db.XXXXXX); then
     exit 1
 fi
 
+# shellcheck disable=SC2329
 cleanup() {
     if [[ -n "${SUDO_KEEP_ALIVE_PID:-}" ]] && kill -0 "$SUDO_KEEP_ALIVE_PID" 2>/dev/null; then
         kill "$SUDO_KEEP_ALIVE_PID" 2>/dev/null
@@ -466,8 +471,9 @@ get_update_type() {
     local up_old="${v_old%-*}"
     local up_new="${v_new%-*}"
 
-    local nums_old=($(echo "$up_old" | sed 's/[^0-9]/ /g'))
-    local nums_new=($(echo "$up_new" | sed 's/[^0-9]/ /g'))
+    local nums_old nums_new
+    read -ra nums_old <<< "${up_old//[^0-9]/ }"
+    read -ra nums_new <<< "${up_new//[^0-9]/ }"
 
     local len=${#nums_new[@]}
     for (( i=0; i<len; i++ )); do
@@ -594,12 +600,14 @@ backup_pacman_db() {
         sudo mkdir -p "$BACKUP_DIR"
     fi
 
-    local BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+    local BACKUP_DATE
+    BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
     local BACKUP_FILE="$BACKUP_DIR/pacman_database_$BACKUP_DATE.tar.gz"
 
     if sudo tar --xattrs --warning=no-file-changed -czf "$BACKUP_FILE" -C /var/lib/pacman/ local; then
         echo -e "${green}Backup created: ${white}$(basename "$BACKUP_FILE")${reset}"
 
+        # shellcheck disable=SC2010
         (cd "$BACKUP_DIR" && ls -tp pacman_database_*.tar.gz | grep -v '/$' | tail -n +$((KEEP_COPIES + 1)) | xargs -I {} sudo rm -- {})
     else
         echo -e "${red}Failed to create backup!${reset}"
@@ -618,6 +626,7 @@ get_current_mirror() {
     echo "${mirror:-Unknown}"
 }
 
+# shellcheck disable=SC2329
 launch_detached() {
     if [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
         local env_args=()
@@ -635,11 +644,12 @@ launch_detached() {
     fi
 }
 
+# shellcheck disable=SC2329
 launch_updater_gui() {
     local script_bin="${SCRIPT_BIN:-$(realpath "$(command -v "$0" || echo "$0")")}"
 
     if [[ -n "$TERMINAL" ]] && command -v "$TERMINAL" >/dev/null 2>&1; then
-        launch_detached $TERMINAL -e "$script_bin"
+        launch_detached "$TERMINAL" -e "$script_bin"
         return
     fi
 
@@ -658,7 +668,8 @@ launch_updater_gui() {
     for term_cmd in "${terms[@]}"; do
         local bin="${term_cmd%% *}"
         if command -v "$bin" >/dev/null 2>&1; then
-            local term_arr=($term_cmd)
+            local term_arr
+            read -ra term_arr <<< "$term_cmd"
             launch_detached "${term_arr[@]}" "$script_bin"
             return
         fi
@@ -672,13 +683,16 @@ refresh_mirrors() {
     local reason="${1:-Mirror instability detected (timeouts or errors).}"
 
     local mirror_list="/etc/pacman.d/mirrorlist"
-    local current_mirror=$(get_current_mirror)
+    local current_mirror
+    current_mirror=$(get_current_mirror)
     local mirror_age="Unknown"
 
     if [[ -f "$mirror_list" ]]; then
-        local file_ts=$(stat -c %Y "$mirror_list" 2>/dev/null)
+        local file_ts
+        file_ts=$(stat -c %Y "$mirror_list" 2>/dev/null)
         if [[ -n "$file_ts" ]]; then
-            local now_ts=$(date +%s)
+            local now_ts
+            now_ts=$(date +%s)
             local diff_sec=$((now_ts - file_ts))
 
             if (( diff_sec < 0 )); then
@@ -758,7 +772,7 @@ refresh_mirrors() {
                     return 255
                 fi
 
-                return $exit_code
+                return "$exit_code"
             }
 
             if [[ -n "$CUSTOM_REFLECTOR" ]]; then
@@ -766,7 +780,8 @@ refresh_mirrors() {
                 run_refl_and_check "$CUSTOM_REFLECTOR"
                 local refl_res=$?
                 if [[ $refl_res -eq 0 ]]; then
-                    local new_mirror=$(get_current_mirror)
+                    local new_mirror
+                    new_mirror=$(get_current_mirror)
                     echo -e "${green}Custom Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
                     REFL_SUCCESS=true
                 elif [[ $refl_res -eq 255 ]]; then
@@ -782,7 +797,8 @@ refresh_mirrors() {
                 run_refl_and_check "$DEFAULT_REFLECTOR"
                 local refl_res=$?
                 if [[ $refl_res -eq 0 ]]; then
-                    local new_mirror=$(get_current_mirror)
+                    local new_mirror
+                    new_mirror=$(get_current_mirror)
                     echo -e "${green}Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
                     return 0
                 elif [[ $refl_res -eq 255 ]]; then
@@ -975,13 +991,14 @@ done
 log_step "Calculating update list (pacman -Qu)..."
 
 if ! $DAEMON_MODE; then
-    sudo chown -R $(id -un):$(id -gn) "$CHECK_DB"
+    sudo chown -R "$(id -un):$(id -gn)" "$CHECK_DB"
 fi
 
 ignored_pkgs=$(pacman-conf IgnorePkg 2>/dev/null | tr ' ' '\n')
 ignored_groups=$(pacman-conf IgnoreGroup 2>/dev/null | tr ' ' '\n')
 
 if [[ -n "$ignored_groups" ]]; then
+    # shellcheck disable=SC2086
     group_pkgs=$(pacman -Sgq $ignored_groups 2>/dev/null)
     ignored_pkgs="$ignored_pkgs"$'\n'"$group_pkgs"
 fi
@@ -1100,6 +1117,7 @@ fi
 
 if [[ -n "$aur_pkgs" && -n "$AUR_HELPER" ]]; then
     log_step "Fetching AUR metadata..."
+    # shellcheck disable=SC2086
     while IFS='' read -r line; do
         NEW_DATA["${line%%~|~*}"]="${line#*~|~}"
     done < <(echo "$aur_pkgs" | xargs -r env LC_ALL=C $AUR_HELPER -Si 2>/dev/null | parse_metadata "AUR")
@@ -1143,16 +1161,16 @@ while read -r pkgname old_ver _ new_ver _rest; do
         if (( percent % 5 == 0 || current_idx == pkg_count )); then
             filled=$(( percent / 5 ))
             empty=$(( 20 - filled ))
-            printf "\r\033[2K${gray}Analysis: ${blue}["
+            printf '\r\033[2K%bAnalysis: %b[' "$gray" "$blue"
             printf "%${filled}s" | tr ' ' '='
             printf ">"
             printf "%${empty}s" | tr ' ' '-'
-            printf "] ${percent}%%${reset}"
+            printf '] %s%%%b' "$percent" "$reset"
         fi
     fi
 
     IFS='|' read -r repo date_new size desc <<< "${NEW_DATA[$pkgname]}"
-    IFS='|' read -r date_old reason <<< "${OLD_DATA[$pkgname]}"
+    IFS='|' read -r _ reason <<< "${OLD_DATA[$pkgname]}"
 
     is_explicit=0
     [[ "$reason" == *"Explicitly"* ]] && is_explicit=1
@@ -1211,6 +1229,7 @@ echo -e "\n"
 
 total_download_size="0.00 MiB"
 if [[ -s "$OUTPUT_FILE" ]]; then
+    # shellcheck disable=SC2016
     total_download_size=$(env LC_ALL=C awk -F'\t' '{
         if ($8 != "AUR" && $9 != "N/A" && $9 != "") {
             split($9, a, " ")
@@ -1355,7 +1374,8 @@ printf "${dim}%s${reset}\n" "$sep_line"
 echo -e "${gray}Total Download Size: ${white}${bold}${total_download_size}${reset}"
 
 give_advice() {
-    local now=$(date +%s)
+    local now
+    now=$(date +%s)
 
     local T_MIRROR_SEC=$(( T_MIRROR_H * 3600 ))
     local T_FEAT_SEC=$(( T_FEAT_H * 3600 ))
@@ -1499,13 +1519,14 @@ give_advice() {
         3) color="${red}${bold}"; verdict="DANGER" ;;
     esac
 
-    printf "${bold}ADVISOR:${reset} "
+    printf '%bADVISOR:%b ' "$bold" "$reset"
 
     if (( max_wait_sec == 0 )); then
         echo -e "${green}${bold}GO FOR IT!${reset} ${dim}(Packages have stabilized. Mirrors synced.)${reset}"
         GLOBAL_ADVISOR_SAFE=true
     else
-        local target_time=$(date -d "@$(( now + max_wait_sec ))" +%H:%M)
+        local target_time
+        target_time=$(date -d "@$(( now + max_wait_sec ))" +%H:%M)
 
         local wait_h=$(( max_wait_sec / 3600 ))
         local wait_m=$(( (max_wait_sec % 3600) / 60 ))
@@ -1822,7 +1843,6 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
         if [[ "${ENABLE_POST_CLEANUP,,}" == "true" ]]; then
             echo -e "\n${blue}${bold}Performing post-update system cleanup...${reset}"
 
-            local orphans
             orphans=$(pacman -Qdtq 2>/dev/null)
             if [[ -n "$orphans" ]]; then
                 echo -e "${dim}Removing orphaned packages...${reset}"
