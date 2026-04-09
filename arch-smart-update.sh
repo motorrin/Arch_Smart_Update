@@ -544,32 +544,23 @@ except Exception:
                 NEWS_CACHE="$CONFIG_DIR/news.cache"
 
                 OLD_NEWS_TS=0
-                NOTIFY_COUNT=0
 
                 if [[ -f "$NEWS_CACHE" ]]; then
-                    IFS=':' read -r OLD_NEWS_TS NOTIFY_COUNT < "$NEWS_CACHE" 2>/dev/null
+                    OLD_NEWS_TS=$(cat "$NEWS_CACHE" 2>/dev/null)
                 fi
 
                 [[ ! "$OLD_NEWS_TS" =~ ^[0-9]+$ ]] && OLD_NEWS_TS=0
-                [[ ! "$NOTIFY_COUNT" =~ ^[0-9]+$ ]] && NOTIFY_COUNT=0
 
                 if (( news_ts != OLD_NEWS_TS )); then
-                    OLD_NEWS_TS="$news_ts"
-                    NOTIFY_COUNT=0
-                fi
-
-                if (( NOTIFY_COUNT < 3 )); then
                     if command -v notify-send >/dev/null 2>&1; then
                         local notif_icon="dialog-warning"
                         [[ -f "$ICON_PATH" ]] && notif_icon="$ICON_PATH"
-
-                        local current_reminder=$((NOTIFY_COUNT + 1))
 
                         if notify-send --help 2>&1 | grep -q -- "--action"; then
                             local wait_script
                             wait_script=$(cat <<EOF
 $(declare -f launch_detached)
-action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.\n\n[Reminder $current_reminder/3]")
+action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 if [[ "\$action" == "read" ]]; then
     launch_detached xdg-open "https://archlinux.org/"
 fi
@@ -578,12 +569,11 @@ EOF
                             nohup bash -c "$wait_script" >/dev/null 2>&1 &
                         else
                             notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" \
-                                "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.\n\n[Reminder $current_reminder/3]"
+                                "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating."
                         fi
                     fi
 
-                    ((NOTIFY_COUNT++))
-                    echo "${OLD_NEWS_TS}:${NOTIFY_COUNT}" > "$NEWS_CACHE"
+                    echo "$news_ts" > "$NEWS_CACHE"
                 fi
             fi
         else
