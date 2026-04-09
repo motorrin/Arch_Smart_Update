@@ -8,9 +8,10 @@
 ![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)
 
 **Tired of blindly running `pacman -Syu` and crossing your fingers that your system doesn't break?**
+
 <br>
 
-## 🚀 [**JUMP STRAIGHT TO INSTALLATION**](#installation) 🚀
+**[Skip to Installation](#installation)**
 
 </div>
 
