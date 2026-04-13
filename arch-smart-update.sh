@@ -233,7 +233,10 @@ else
 fi
 
 if [[ -n "$SETTINGS_CONF" && -f "$SETTINGS_CONF" ]]; then
-    while IFS='=' read -r key val; do
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*#.*$ || -z "$line" || "$line" != *"="* ]] && continue
+        key="${line%%=*}"
+        val="${line#*=}"
         val="${val%$'\r'}"
         [[ "$val" == \"*\" || "$val" == \'*\' ]] && val="${val:1:-1}"
 
@@ -309,7 +312,7 @@ sync_daemon_state() {
 
         if ! command -v systemctl >/dev/null 2>&1; then
             echo -e "${yellow}Notice: systemctl not found (non-systemd system).${reset}"
-            echo -e "${dim}To use the background checker, please manually schedule a cron job for: ${reset}${white}$(realpath "$(command -v "$0" || echo "$0")") --daemon${reset}"
+            echo -e "${dim}To use the background checker, please manually schedule a cron job for: ${reset}${white}$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")") --daemon${reset}"
             return 0
         fi
 
@@ -317,7 +320,7 @@ sync_daemon_state() {
 
         if [[ -f "$DAEMON_TEMPLATE" ]]; then
             local SCRIPT_PATH TMP_SVC TMP_TMR
-            SCRIPT_PATH=$(realpath "$(command -v "$0" || echo "$0")")
+            SCRIPT_PATH="$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")"
             TMP_SVC=$(mktemp)
             TMP_TMR=$(mktemp)
 
@@ -342,7 +345,10 @@ sync_daemon_state() {
                 }
             ' "$DAEMON_TEMPLATE"
 
-            if ! cmp -s "$TMP_SVC" "$SYSTEMD_USER_DIR/arch-smart-update.service" || ! cmp -s "$TMP_TMR" "$SYSTEMD_USER_DIR/arch-smart-update.timer"; then
+            if [[ ! -s "$TMP_SVC" || ! -s "$TMP_TMR" ]]; then
+                rm -f "$TMP_SVC" "$TMP_TMR"
+                echo -e "${yellow}Warning: Failed to generate systemd units from template.${reset}"
+            elif ! cmp -s "$TMP_SVC" "$SYSTEMD_USER_DIR/arch-smart-update.service" || ! cmp -s "$TMP_TMR" "$SYSTEMD_USER_DIR/arch-smart-update.timer"; then
                 mv "$TMP_SVC" "$SYSTEMD_USER_DIR/arch-smart-update.service"
                 mv "$TMP_TMR" "$SYSTEMD_USER_DIR/arch-smart-update.timer"
                 chmod 644 "$SYSTEMD_USER_DIR/arch-smart-update.service" "$SYSTEMD_USER_DIR/arch-smart-update.timer"
@@ -543,7 +549,7 @@ except Exception:
         diff_hours=$(( (now_time - news_ts) / 3600 ))
 
         if (( diff_hours < 336 )); then # 14 days
-            echo -e "\r\033[2K${red}${bold}WARNING: Fresh Arch News detected ($diff_hours h ago)!${reset}"
+            echo -e "\r\033[2K${red}${bold}Fresh Arch News detected ($diff_hours h ago)!${reset}"
             echo -e "${red}Check https://archlinux.org/ before updating.${reset}"
 
             if [[ "$DAEMON_MODE" == true ]]; then
@@ -607,8 +613,7 @@ backup_pacman_db() {
     if sudo tar --xattrs --warning=no-file-changed -czf "$BACKUP_FILE" -C /var/lib/pacman/ local; then
         echo -e "${green}Backup created: ${white}$(basename "$BACKUP_FILE")${reset}"
 
-        # shellcheck disable=SC2010
-        (cd "$BACKUP_DIR" && ls -tp pacman_database_*.tar.gz | grep -v '/$' | tail -n +$((KEEP_COPIES + 1)) | xargs -I {} sudo rm -- {})
+        sudo bash -c "find \"$BACKUP_DIR\" -maxdepth 1 -type f -name 'pacman_database_*.tar.gz' -printf '%T@\t%p\0' 2>/dev/null | sort -z -rn | tail -z -n +$((KEEP_COPIES + 1)) | cut -z -f2- | xargs -0 -r rm -f --"
     else
         echo -e "${red}Failed to create backup!${reset}"
         echo -ne "${yellow}Continue anyway? [y/N]: ${reset}"
@@ -646,7 +651,7 @@ launch_detached() {
 
 # shellcheck disable=SC2329
 launch_updater_gui() {
-    local script_bin="${SCRIPT_BIN:-$(realpath "$(command -v "$0" || echo "$0")")}"
+    local script_bin="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
 
     if [[ -n "$TERMINAL" ]] && command -v "$TERMINAL" >/dev/null 2>&1; then
         launch_detached "$TERMINAL" -e "$script_bin"
@@ -793,7 +798,7 @@ refresh_mirrors() {
             fi
 
             if ! $REFL_SUCCESS; then
-                echo -e "${dim}Ranking mirrors... WARNINGS ARE EXPECTED.${reset}"
+                echo -e "${dim}Ranking mirrors... WARNINGS are expected.${reset}"
                 run_refl_and_check "$DEFAULT_REFLECTOR"
                 local refl_res=$?
                 if [[ $refl_res -eq 0 ]]; then
@@ -923,26 +928,18 @@ attempt=0
 while (( attempt <= MAX_RETRIES )); do
     log_step "Syncing temporary database (pacman -Sy)..."
 
-    set -o pipefail
     if $DAEMON_MODE; then
         PACMAN_OPTS=""
         if pacman --disable-sandbox --version >/dev/null 2>&1; then
             PACMAN_OPTS="--disable-sandbox"
         fi
 
-        if env LC_ALL=C fakeroot pacman $PACMAN_OPTS -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"; then
-            PACMAN_EXIT=0
-        else
-            PACMAN_EXIT=$?
-        fi
+        env LC_ALL=C fakeroot pacman $PACMAN_OPTS -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
+        PACMAN_EXIT=${PIPESTATUS[0]}
     else
-        if env LC_ALL=C sudo pacman -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"; then
-            PACMAN_EXIT=0
-        else
-            PACMAN_EXIT=$?
-        fi
+        env LC_ALL=C sudo pacman -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
+        PACMAN_EXIT=${PIPESTATUS[0]}
     fi
-    set +o pipefail
 
     if grep -iqE "error|failed|timed out|could not resolve" "$SYNC_LOG"; then
         IS_DIRTY=1
@@ -1586,7 +1583,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
             if notify-send --help 2>&1 | grep -q -- "--action"; then
                 wait_script=$(cat <<EOF
 export TERMINAL="$TERMINAL"
-export SCRIPT_BIN="$(realpath "$(command -v "$0" || echo "$0")")"
+export SCRIPT_BIN="$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")"
 $(declare -f launch_detached launch_updater_gui)
 action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
 if [[ "\$action" == "update" ]]; then
@@ -1863,7 +1860,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             sudo journalctl --vacuum-size=100M >/dev/null 2>&1
 
             echo -e "${dim}Clearing user thumbnail cache...${reset}"
-            rm -rf ~/.cache/thumbnails/* 2>/dev/null
+            find "$USER_HOME/.cache/thumbnails" -mindepth 1 -delete 2>/dev/null
 
             echo -e "${green}System cleanup complete!${reset}\n"
         else
