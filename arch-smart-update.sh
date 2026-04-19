@@ -287,10 +287,11 @@ declare -A FEAT_MAP
 for pkg in "${FEATURE_PKGS[@]}"; do FEAT_MAP["$pkg"]=1; done
 
 sync_daemon_state() {
-    [[ "$DAEMON_MODE" == true ]] && return 0
+    local QUIET=false
+    [[ "$DAEMON_MODE" == true ]] && QUIET=true
 
     if [[ "$EUID" -eq 0 ]]; then
-        echo -e "${yellow}Warning: Script run as root. Skipping systemd user daemon configuration.${reset}"
+        $QUIET || echo -e "${yellow}Warning: Script run as root. Skipping systemd user daemon configuration.${reset}"
         return 0
     fi
 
@@ -298,7 +299,7 @@ sync_daemon_state() {
 
     if [[ "${ENABLE_BACKGROUND_CHECK,,}" == "true" ]]; then
         if ! command -v fakeroot >/dev/null 2>&1; then
-            echo -e "${yellow}Background check requires 'fakeroot' (install base-devel). Disabling daemon.${reset}"
+            $QUIET || echo -e "${yellow}Background check requires 'fakeroot' (install base-devel). Disabling daemon.${reset}"
             ENABLE_BACKGROUND_CHECK="false"
             if command -v systemctl >/dev/null 2>&1; then
                 if systemctl --user is-active --quiet arch-smart-update.timer 2>/dev/null || [[ -f "$SYSTEMD_USER_DIR/arch-smart-update.timer" ]]; then
@@ -311,8 +312,8 @@ sync_daemon_state() {
         fi
 
         if ! command -v systemctl >/dev/null 2>&1; then
-            echo -e "${yellow}Notice: systemctl not found (non-systemd system).${reset}"
-            echo -e "${dim}To use the background checker, please manually schedule a cron job for: ${reset}${white}$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")") --daemon${reset}"
+            $QUIET || echo -e "${yellow}Notice: systemctl not found (non-systemd system).${reset}"
+            $QUIET || echo -e "${dim}To use the background checker, please manually schedule a cron job for: ${reset}${white}$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")") --daemon${reset}"
             return 0
         fi
 
@@ -324,12 +325,40 @@ sync_daemon_state() {
             TMP_SVC=$(mktemp)
             TMP_TMR=$(mktemp)
 
-            export SCRIPT_PATH START_DELAY CHECK_INTERVAL
+            local CURRENT_INTERVAL="$CHECK_INTERVAL"
+            local NEXT_CHECK_FILE="$CONFIG_DIR/next_check.conf"
+
+            if [[ -f "$NEXT_CHECK_FILE" ]]; then
+                local file_mtime
+                file_mtime=$(stat -c %Y "$NEXT_CHECK_FILE" 2>/dev/null || echo 0)
+                local boot_ts
+                boot_ts=$(awk '/^btime/ {print $2}' /proc/stat 2>/dev/null || echo 0)
+
+                if (( file_mtime > 0 && boot_ts > 0 && file_mtime < boot_ts )); then
+                    rm -f "$NEXT_CHECK_FILE"
+                fi
+            fi
+
+            if [[ -f "$NEXT_CHECK_FILE" ]]; then
+                local next_ts
+                next_ts=$(cat "$NEXT_CHECK_FILE" 2>/dev/null)
+                local now_ts
+                now_ts=$(date +%s)
+
+                if [[ "$next_ts" =~ ^[0-9]+$ ]] && (( next_ts > now_ts )); then
+                    local diff_m=$(( (next_ts - now_ts) / 60 + 1 ))
+                    CURRENT_INTERVAL="${diff_m}min"
+                else
+                    rm -f "$NEXT_CHECK_FILE"
+                fi
+            fi
+
+            export SCRIPT_PATH START_DELAY CURRENT_INTERVAL
             awk -v svc="$TMP_SVC" -v tmr="$TMP_TMR" '
                 BEGIN {
                     script = ENVIRON["SCRIPT_PATH"]
                     delay = ENVIRON["START_DELAY"]
-                    interval = ENVIRON["CHECK_INTERVAL"]
+                    interval = ENVIRON["CURRENT_INTERVAL"]
                 }
                 /^\[TimerTemplate\]/ { in_timer=1; next }
                 {
@@ -347,13 +376,14 @@ sync_daemon_state() {
 
             if [[ ! -s "$TMP_SVC" || ! -s "$TMP_TMR" ]]; then
                 rm -f "$TMP_SVC" "$TMP_TMR"
-                echo -e "${yellow}Warning: Failed to generate systemd units from template.${reset}"
+                $QUIET || echo -e "${yellow}Warning: Failed to generate systemd units from template.${reset}"
             elif ! cmp -s "$TMP_SVC" "$SYSTEMD_USER_DIR/arch-smart-update.service" || ! cmp -s "$TMP_TMR" "$SYSTEMD_USER_DIR/arch-smart-update.timer"; then
                 mv "$TMP_SVC" "$SYSTEMD_USER_DIR/arch-smart-update.service"
                 mv "$TMP_TMR" "$SYSTEMD_USER_DIR/arch-smart-update.timer"
                 chmod 644 "$SYSTEMD_USER_DIR/arch-smart-update.service" "$SYSTEMD_USER_DIR/arch-smart-update.timer"
                 systemctl --user daemon-reload >/dev/null 2>&1
                 systemctl --user enable --now arch-smart-update.timer >/dev/null 2>&1
+                systemctl --user restart arch-smart-update.timer >/dev/null 2>&1
             else
                 rm -f "$TMP_SVC" "$TMP_TMR"
             fi
@@ -370,6 +400,19 @@ sync_daemon_state() {
 }
 
 sync_daemon_state
+
+if [[ "$DAEMON_MODE" == true ]]; then
+    NEXT_CHECK_FILE="$CONFIG_DIR/next_check.conf"
+    if [[ -f "$NEXT_CHECK_FILE" ]]; then
+        NEXT_TS=$(cat "$NEXT_CHECK_FILE" 2>/dev/null)
+        NOW_TS=$(date +%s)
+        if [[ "$NEXT_TS" =~ ^[0-9]+$ ]] && (( NEXT_TS > NOW_TS + 300 )); then
+            target_time=$(date -d "@$NEXT_TS" +%H:%M)
+            log_step "Scheduled check is in the future ($target_time). Woke up early. Exiting."
+            exit 0
+        fi
+    fi
+fi
 
 if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
     LOG_DIR="$CONFIG_DIR/logs"
@@ -585,6 +628,7 @@ EOF
                         fi
                     fi
 
+                    rm -f "$NEWS_CACHE"
                     echo "$news_ts" > "$NEWS_CACHE"
                 fi
             fi
@@ -1042,6 +1086,9 @@ if [[ -z "$updates" ]]; then
         done <<< "$ignored_updates"
         echo ""
     fi
+
+    rm -f "$CONFIG_DIR/next_check.conf"
+    sync_daemon_state >/dev/null 2>&1
 
     if [[ "$DAEMON_MODE" == true ]]; then
         rm -f "$CONFIG_DIR/updates.cache"
@@ -1521,6 +1568,9 @@ give_advice() {
     if (( max_wait_sec == 0 )); then
         echo -e "${green}${bold}GO FOR IT!${reset} ${dim}(Packages have stabilized. Mirrors synced.)${reset}"
         GLOBAL_ADVISOR_SAFE=true
+
+        rm -f "$CONFIG_DIR/next_check.conf"
+        sync_daemon_state >/dev/null 2>&1
     else
         local target_time
         target_time=$(date -d "@$(( now + max_wait_sec ))" +%H:%M)
@@ -1541,7 +1591,12 @@ give_advice() {
              done
              echo ""
         fi
+
         GLOBAL_ADVISOR_SAFE=false
+
+        rm -f "$CONFIG_DIR/next_check.conf"
+        echo "$(( now + max_wait_sec ))" > "$CONFIG_DIR/next_check.conf"
+        sync_daemon_state >/dev/null 2>&1
     fi
     echo -e "${dim}---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------${reset}"
 }
@@ -1578,6 +1633,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
             notif_icon="software-update-available"
             [[ -f "$ICON_PATH" ]] && notif_icon="$ICON_PATH"
 
+            rm -f "$CACHE_FILE"
             echo "$pkg_count" > "$CACHE_FILE"
 
             if notify-send --help 2>&1 | grep -q -- "--action"; then
@@ -1830,9 +1886,10 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 
     if $UPDATE_SUCCESS; then
         rm -f "$CONFIG_DIR/updates.cache"
+        rm -f "$CONFIG_DIR/next_check.conf"
 
         if [[ "${ENABLE_BACKGROUND_CHECK,,}" == "true" ]] && command -v systemctl >/dev/null 2>&1; then
-            systemctl --user restart arch-smart-update.timer >/dev/null 2>&1
+            sync_daemon_state >/dev/null 2>&1
         fi
 
         echo -e "\n${green}Update process finished successfully.${reset}"
