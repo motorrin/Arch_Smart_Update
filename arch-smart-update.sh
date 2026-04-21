@@ -383,7 +383,6 @@ sync_daemon_state() {
                 chmod 644 "$SYSTEMD_USER_DIR/arch-smart-update.service" "$SYSTEMD_USER_DIR/arch-smart-update.timer"
                 systemctl --user daemon-reload >/dev/null 2>&1
                 systemctl --user enable --now arch-smart-update.timer >/dev/null 2>&1
-                systemctl --user restart arch-smart-update.timer >/dev/null 2>&1
             else
                 rm -f "$TMP_SVC" "$TMP_TMR"
             fi
