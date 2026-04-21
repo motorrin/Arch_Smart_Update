@@ -348,7 +348,6 @@ sync_daemon_state() {
                 if [[ "$next_ts" =~ ^[0-9]+$ ]] && (( next_ts > now_ts )); then
                     local diff_m=$(( (next_ts - now_ts) / 60 + 1 ))
                     CURRENT_INTERVAL="${diff_m}min"
-                    START_DELAY="${diff_m}min"
                 else
                     rm -f "$NEXT_CHECK_FILE"
                 fi
