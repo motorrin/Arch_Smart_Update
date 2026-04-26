@@ -404,10 +404,27 @@ if [[ "$DAEMON_MODE" == true ]]; then
     if command -v systemctl >/dev/null 2>&1; then
         while IFS='=' read -r key val; do
             export "$key=$val"
-        done < <(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS)=')
+        done < <(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_CURRENT_DESKTOP|XAUTHORITY)=')
     fi
-    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+
+    if [[ -z "$WAYLAND_DISPLAY" ]] && [[ -d "$XDG_RUNTIME_DIR" ]]; then
+        for sock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+            if [[ -S "$sock" ]]; then
+                export WAYLAND_DISPLAY="$(basename "$sock")"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$DISPLAY" ]]; then
+        for sock in /tmp/.X11-unix/X[0-9]*; do
+            if [[ -S "$sock" ]]; then
+                export DISPLAY=":${sock#/tmp/.X11-unix/X}"
+                break
+            fi
+        done
+    fi
 
     NEXT_CHECK_FILE="$CONFIG_DIR/next_check.conf"
     if [[ -f "$NEXT_CHECK_FILE" ]]; then
@@ -621,9 +638,11 @@ except Exception:
                         if notify-send --help 2>&1 | grep -q -- "--action"; then
                             local wait_script
                             wait_script=$(cat <<EOF
+export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 $(declare -f launch_detached)
 action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
-if [[ "\$action" == "read" ]]; then
+action_clean=\$(echo "\$action" | tr -d ' \n\r')
+if [[ "\$action_clean" == "read" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
     launch_detached xdg-open "https://archlinux.org/"
 fi
 EOF
@@ -684,16 +703,28 @@ get_current_mirror() {
 
 # shellcheck disable=SC2329
 launch_detached() {
-    if [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
+    local is_full_de=false
+    if [[ -n "$XDG_CURRENT_DESKTOP" ]]; then
+        case "${XDG_CURRENT_DESKTOP^^}" in
+            *GNOME*|*KDE*|*PLASMA*|*XFCE*|*CINNAMON*|*MATE*|*LXQT*)
+                is_full_de=true
+                ;;
+        esac
+    fi
+
+    if $is_full_de && [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
         local env_args=()
         [[ -n "$DISPLAY" ]] && env_args+=("-E" "DISPLAY=$DISPLAY")
         [[ -n "$WAYLAND_DISPLAY" ]] && env_args+=("-E" "WAYLAND_DISPLAY=$WAYLAND_DISPLAY")
         [[ -n "$XAUTHORITY" ]] && env_args+=("-E" "XAUTHORITY=$XAUTHORITY")
         [[ -n "$XDG_RUNTIME_DIR" ]] && env_args+=("-E" "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
         [[ -n "$DBUS_SESSION_BUS_ADDRESS" ]] && env_args+=("-E" "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS")
+        [[ -n "$PATH" ]] && env_args+=("-E" "PATH=$PATH")
 
-        systemd-run --user --quiet --collect "${env_args[@]}" "$@"
-    elif command -v setsid >/dev/null 2>&1; then
+        systemd-run --user --quiet --collect "${env_args[@]}" "$@" 2>/dev/null && return
+    fi
+
+    if command -v setsid >/dev/null 2>&1; then
         setsid -f "$@" >/dev/null 2>&1
     else
         nohup "$@" >/dev/null 2>&1 &
@@ -1648,11 +1679,13 @@ if [[ "$DAEMON_MODE" == true ]]; then
 
             if notify-send --help 2>&1 | grep -q -- "--action"; then
                 wait_script=$(cat <<EOF
-export TERMINAL="$TERMINAL"
-export SCRIPT_BIN="$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")"
+export TERMINAL="${TERMINAL:-}"
+export SCRIPT_BIN="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
+export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 $(declare -f launch_detached launch_updater_gui)
 action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
-if [[ "\$action" == "update" ]]; then
+action_clean=\$(echo "\$action" | tr -d ' \n\r')
+if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
     launch_updater_gui
 fi
 EOF
