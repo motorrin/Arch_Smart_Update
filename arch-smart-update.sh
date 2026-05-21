@@ -413,6 +413,28 @@ if [[ "$DAEMON_MODE" == true ]]; then
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
+    if [[ -z "$DISPLAY" || -z "$XAUTHORITY" || -z "$XDG_CURRENT_DESKTOP" ]]; then
+        for pid in $(pgrep -u "$EUID" 2>/dev/null); do
+            if [[ -r "/proc/$pid/environ" ]]; then
+                proc_env=$(cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n')
+                proc_disp=$(echo "$proc_env" | grep '^DISPLAY=')
+                proc_xauth=$(echo "$proc_env" | grep '^XAUTHORITY=')
+                proc_desktop=$(echo "$proc_env" | grep '^XDG_CURRENT_DESKTOP=')
+
+                if [[ -n "$proc_disp" ]]; then
+                    [[ -z "$DISPLAY" ]] && export "$proc_disp"
+                    [[ -z "$XAUTHORITY" && -n "$proc_xauth" ]] && export "$proc_xauth"
+                    [[ -z "$XDG_CURRENT_DESKTOP" && -n "$proc_desktop" ]] && export "$proc_desktop"
+                    break
+                fi
+            fi
+        done
+    fi
+
+    if [[ -z "$XAUTHORITY" && -f "$HOME/.Xauthority" ]]; then
+        export XAUTHORITY="$HOME/.Xauthority"
+    fi
+
     if [[ -z "$WAYLAND_DISPLAY" ]] && [[ -d "$XDG_RUNTIME_DIR" ]]; then
         for sock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
             if [[ -S "$sock" ]]; then
@@ -637,39 +659,18 @@ except Exception:
                         [[ -f "$ICON_PATH" ]] && notif_icon="$ICON_PATH"
 
                         if notify-send --help 2>&1 | grep -q -- "--action"; then
-                            local IS_FULL_DE=false
-                            if [[ -n "$XDG_CURRENT_DESKTOP" ]]; then
-                                case "${XDG_CURRENT_DESKTOP^^}" in
-                                    *GNOME*|*KDE*|*PLASMA*|*XFCE*|*CINNAMON*|*MATE*|*LXQT*) IS_FULL_DE=true ;;
-                                esac
-                            fi
-
-                            if [[ "$IS_FULL_DE" == true ]]; then
-                                local wait_script
-                                wait_script=$(cat <<EOF
-export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
-$(declare -f launch_detached)
-action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
-action_clean=\$(echo "\$action" | tr -d ' \n\r')
-if [[ "\$action_clean" == "read" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
-    launch_detached xdg-open "https://archlinux.org/"
-fi
-EOF
-)
-                                launch_detached bash -c "$wait_script"
-                            else
-                                local TMP_NEWS
-                                TMP_NEWS=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_news.XXXXXX.sh")
-                                cat <<EOF > "$TMP_NEWS"
+                            local TMP_NEWS
+                            TMP_NEWS=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_news.XXXXXX.sh")
+                            cat <<EOF > "$TMP_NEWS"
 #!/bin/bash
-export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 export DISPLAY="${DISPLAY:-}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}"
 export XAUTHORITY="${XAUTHORITY:-}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
+export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
-action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
 rm -f "\$0"
@@ -678,14 +679,8 @@ if [[ "\$action_clean" == "read" || "\$action_clean" == "default" || "\$action_c
     exec xdg-open "https://archlinux.org/"
 fi
 EOF
-                                chmod +x "$TMP_NEWS"
-                                if command -v systemd-run >/dev/null 2>&1; then
-                                    systemd-run --user --quiet --collect "$TMP_NEWS"
-                                else
-                                    nohup "$TMP_NEWS" >/dev/null 2>&1 &
-                                    disown
-                                fi
-                            fi
+                            chmod +x "$TMP_NEWS"
+                            launch_detached "$TMP_NEWS"
                         else
                             launch_detached notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" \
                                 "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating."
@@ -741,22 +736,14 @@ get_current_mirror() {
 
 # shellcheck disable=SC2329
 launch_detached() {
-    local is_systemd_de=false
-    if [[ -n "$XDG_CURRENT_DESKTOP" ]]; then
-        case "${XDG_CURRENT_DESKTOP^^}" in
-            *GNOME*|*KDE*|*PLASMA*)
-                is_systemd_de=true
-                ;;
-        esac
-    fi
-
-    if $is_systemd_de && [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
+    if [[ -d /run/systemd/system ]] && command -v systemd-run >/dev/null 2>&1; then
         local env_args=()
         [[ -n "$DISPLAY" ]] && env_args+=("-E" "DISPLAY=$DISPLAY")
         [[ -n "$WAYLAND_DISPLAY" ]] && env_args+=("-E" "WAYLAND_DISPLAY=$WAYLAND_DISPLAY")
         [[ -n "$XAUTHORITY" ]] && env_args+=("-E" "XAUTHORITY=$XAUTHORITY")
         [[ -n "$XDG_RUNTIME_DIR" ]] && env_args+=("-E" "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
         [[ -n "$DBUS_SESSION_BUS_ADDRESS" ]] && env_args+=("-E" "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS")
+        [[ -n "$XDG_CURRENT_DESKTOP" ]] && env_args+=("-E" "XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP")
         [[ -n "$PATH" ]] && env_args+=("-E" "PATH=$PATH")
 
         systemd-run --user --quiet --collect "${env_args[@]}" "$@" 2>/dev/null && return
@@ -797,38 +784,6 @@ launch_detached() {
         "${env_cmd[@]}" nohup "$@" </dev/null >/dev/null 2>&1 &
         disown 2>/dev/null || true
     fi
-}
-
-# shellcheck disable=SC2329
-launch_updater_gui() {
-    local script_bin="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
-
-    if [[ -n "$TERMINAL" ]] && command -v "$TERMINAL" >/dev/null 2>&1; then
-        launch_detached "$TERMINAL" -e "$script_bin"
-        return
-    fi
-
-    if command -v xdg-terminal-exec >/dev/null 2>&1; then
-        launch_detached xdg-terminal-exec "$script_bin"
-        return
-    fi
-
-    local terms=(
-        "alacritty -e" "kitty" "konsole -e" "gnome-terminal --"
-        "xfce4-terminal -x" "terminator -x" "tilix -e" "foot"
-        "wezterm start --" "qterminal -e" "lxterminal -e"
-        "mate-terminal -x" "xterm -e"
-    )
-
-    for term_cmd in "${terms[@]}"; do
-        local bin="${term_cmd%% *}"
-        if command -v "$bin" >/dev/null 2>&1; then
-            local term_arr
-            read -ra term_arr <<< "$term_cmd"
-            launch_detached "${term_arr[@]}" "$script_bin"
-            return
-        fi
-    done
 }
 
 refresh_mirrors() {
@@ -1745,30 +1700,9 @@ if [[ "$DAEMON_MODE" == true ]]; then
             echo "$pkg_count" > "$CACHE_FILE"
 
             if notify-send --help 2>&1 | grep -q -- "--action"; then
-                IS_FULL_DE=false
-                if [[ -n "$XDG_CURRENT_DESKTOP" ]]; then
-                    case "${XDG_CURRENT_DESKTOP^^}" in
-                        *GNOME*|*KDE*|*PLASMA*|*XFCE*|*CINNAMON*|*MATE*|*LXQT*) IS_FULL_DE=true ;;
-                    esac
-                fi
-
-                if [[ "$IS_FULL_DE" == true ]]; then
-                    wait_script=$(cat <<EOF
-export TERMINAL="${TERMINAL:-}"
-export SCRIPT_BIN="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
-export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
-$(declare -f launch_detached launch_updater_gui)
-action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
-action_clean=\$(echo "\$action" | tr -d ' \n\r')
-if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
-    launch_updater_gui
-fi
-EOF
-)
-                    launch_detached bash -c "$wait_script"
-                else
-                    TMP_NOTIFY=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_update.XXXXXX.sh")
-                    cat <<EOF > "$TMP_NOTIFY"
+                local TMP_NOTIFY
+                TMP_NOTIFY=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_update.XXXXXX.sh")
+                cat <<EOF > "$TMP_NOTIFY"
 #!/bin/bash
 export TERMINAL="${TERMINAL:-}"
 export SCRIPT_BIN="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
@@ -1780,7 +1714,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
-action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
 rm -f "\$0"
@@ -1791,7 +1725,7 @@ if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action
     elif command -v xdg-terminal-exec >/dev/null 2>&1; then
         exec xdg-terminal-exec "\$SCRIPT_BIN"
     else
-        for term_cmd in "alacritty -e" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal -x" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
+        for term_cmd in "alacritty -e" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal --disable-server -x" "xfce4-terminal -x" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
             bin="\${term_cmd%% *}"
             if command -v "\$bin" >/dev/null 2>&1; then
                 read -ra term_arr <<< "\$term_cmd"
@@ -1801,14 +1735,8 @@ if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action
     fi
 fi
 EOF
-                    chmod +x "$TMP_NOTIFY"
-                    if command -v systemd-run >/dev/null 2>&1; then
-                        systemd-run --user --quiet --collect "$TMP_NOTIFY"
-                    else
-                        nohup "$TMP_NOTIFY" >/dev/null 2>&1 &
-                        disown
-                    fi
-                fi
+                chmod +x "$TMP_NOTIFY"
+                launch_detached "$TMP_NOTIFY"
             else
                 launch_detached notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" \
                     "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install."
