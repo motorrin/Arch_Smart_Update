@@ -668,9 +668,15 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}"
 export XAUTHORITY="${XAUTHORITY:-}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
-action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+if [[ "\$XDG_CURRENT_DESKTOP" == *"XFCE"* ]]; then
+    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+else
+    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+fi
+
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
 rm -f "\$0"
@@ -1713,7 +1719,12 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
-action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+if [[ "\$XDG_CURRENT_DESKTOP" == *"XFCE"* ]]; then
+    action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+else
+    action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+fi
+
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
 rm -f "\$0"
