@@ -408,12 +408,12 @@ if [[ "$DAEMON_MODE" == true ]]; then
     if command -v systemctl >/dev/null 2>&1; then
         while IFS='=' read -r key val; do
             export "$key=$val"
-        done < <(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_CURRENT_DESKTOP|XAUTHORITY)=')
+        done < <(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_CURRENT_DESKTOP|XAUTHORITY|XDG_DATA_DIRS|XDG_CONFIG_DIRS)=')
     fi
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
-    if [[ -z "$DISPLAY" || -z "$XAUTHORITY" || -z "$XDG_CURRENT_DESKTOP" ]]; then
+    if [[ -z "$DISPLAY" || -z "$XAUTHORITY" || -z "$XDG_CURRENT_DESKTOP" || -z "$DBUS_SESSION_BUS_ADDRESS" || -z "$XDG_DATA_DIRS" ]]; then
         for pid in $(pgrep -u "$EUID" 2>/dev/null); do
             if [[ -r "/proc/$pid/environ" ]]; then
                 proc_env=$(cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n')
@@ -425,6 +425,14 @@ if [[ "$DAEMON_MODE" == true ]]; then
                     [[ -z "$DISPLAY" ]] && export DISPLAY="$proc_disp"
                     [[ -z "$XAUTHORITY" && -n "$proc_xauth" ]] && export XAUTHORITY="$proc_xauth"
                     [[ -z "$XDG_CURRENT_DESKTOP" && -n "$proc_desktop" ]] && export XDG_CURRENT_DESKTOP="$proc_desktop"
+
+                    proc_dbus=$(echo "$proc_env" | awk -F= '/^DBUS_SESSION_BUS_ADDRESS=/ {print $2}')
+                    proc_data=$(echo "$proc_env" | awk -F= '/^XDG_DATA_DIRS=/ {print $2}')
+                    proc_config=$(echo "$proc_env" | awk -F= '/^XDG_CONFIG_DIRS=/ {print $2}')
+
+                    [[ -z "$DBUS_SESSION_BUS_ADDRESS" && -n "$proc_dbus" ]] && export DBUS_SESSION_BUS_ADDRESS="$proc_dbus"
+                    [[ -z "$XDG_DATA_DIRS" && -n "$proc_data" ]] && export XDG_DATA_DIRS="$proc_data"
+                    [[ -z "$XDG_CONFIG_DIRS" && -n "$proc_config" ]] && export XDG_CONFIG_DIRS="$proc_config"
                     break
                 fi
             fi
@@ -639,21 +647,40 @@ except Exception:
         diff_hours=$(( (now_time - news_ts) / 3600 ))
 
         if (( diff_hours < 336 )); then # 14 days
-            echo -e "\r\033[2K${red}${bold}Fresh Arch News detected ($diff_hours h ago)!${reset}"
-            echo -e "${red}Check https://archlinux.org/ before updating.${reset}"
+            local NEWS_CACHE="$CONFIG_DIR/news.cache"
+            local OLD_NEWS_TS=0
+            local NEWS_SILENCED=false
 
-            if [[ "$DAEMON_MODE" == true ]]; then
-                NEWS_CACHE="$CONFIG_DIR/news.cache"
+            if [[ -f "$NEWS_CACHE" ]]; then
+                local cache_val
+                cache_val=$(cat "$NEWS_CACHE" 2>/dev/null)
+                OLD_NEWS_TS="${cache_val%%|*}"
 
-                OLD_NEWS_TS=0
-
-                if [[ -f "$NEWS_CACHE" ]]; then
-                    OLD_NEWS_TS=$(cat "$NEWS_CACHE" 2>/dev/null)
+                if [[ ! "$OLD_NEWS_TS" =~ ^[0-9]+$ ]]; then
+                    OLD_NEWS_TS=0
                 fi
 
-                [[ ! "$OLD_NEWS_TS" =~ ^[0-9]+$ ]] && OLD_NEWS_TS=0
+                if [[ "$news_ts" == "$OLD_NEWS_TS" ]] && [[ "$cache_val" == *"|silenced" ]]; then
+                    NEWS_SILENCED=true
+                fi
+            fi
 
+            if [[ "$DAEMON_MODE" == false ]]; then
+                if [[ "$NEWS_SILENCED" == "true" ]]; then
+                    echo -e "\r\033[2K${green}Fresh Arch News detected ($diff_hours h ago), but already acknowledged/silenced.${reset}"
+                else
+                    echo -e "\r\033[2K${red}${bold}Fresh Arch News detected ($diff_hours h ago)!${reset}"
+                    echo -e "${red}Check https://archlinux.org/ before updating.${reset}"
+                fi
+            fi
+
+            if [[ "$DAEMON_MODE" == true ]]; then
+                local should_notify=false
                 if (( news_ts != OLD_NEWS_TS )); then
+                    should_notify=true
+                fi
+
+                if [[ "$should_notify" == "true" ]]; then
                     if command -v notify-send >/dev/null 2>&1; then
                         local notif_icon="dialog-warning"
                         [[ -f "$ICON_PATH" ]] && notif_icon="$ICON_PATH"
@@ -663,38 +690,90 @@ except Exception:
                             TMP_NEWS=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_news.XXXXXX.sh")
                             cat <<EOF > "$TMP_NEWS"
 #!/bin/bash
+trap 'rm -f "\$0"' EXIT
 export DISPLAY="${DISPLAY:-}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}"
 export XAUTHORITY="${XAUTHORITY:-}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
+is_xfce_lxqt=false
 if [[ "\${XDG_CURRENT_DESKTOP,,}" == *"xfce"* || "\${XDG_CURRENT_DESKTOP,,}" == *"lxqt"* ]]; then
-    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+    is_xfce_lxqt=true
+fi
+
+if [[ "\$is_xfce_lxqt" == "true" ]]; then
+    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" --action="silence=Silence" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 else
-    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" --action="silence=Silence" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 fi
 
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
-rm -f "\$0"
+if [[ "\$action_clean" == "silence" || ( "\$is_xfce_lxqt" == "true" && "\$action_clean" == "1" ) || ( "\$is_xfce_lxqt" != "true" && "\$action_clean" == "2" ) ]]; then
+    echo "${news_ts}|silenced" > "$NEWS_CACHE"
+elif [[ "\$action_clean" == "read" || "\$action_clean" == "default" || ( "\$is_xfce_lxqt" == "true" && "\$action_clean" == "0" ) || ( "\$is_xfce_lxqt" != "true" && ( "\$action_clean" == "0" || "\$action_clean" == "1" ) ) ]]; then
+    echo "${news_ts}|silenced" > "$NEWS_CACHE"
 
-if [[ "\$action_clean" == "read" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
-    exec xdg-open "https://archlinux.org/"
+    open_url() {
+        local url="\$1"
+
+        run_cmd() {
+            local cmd="\$1"
+            local arg="\$2"
+            if command -v systemd-run >/dev/null 2>&1; then
+                local env_args=()
+                [[ -n "\$DISPLAY" ]] && env_args+=("-E" "DISPLAY=\$DISPLAY")
+                [[ -n "\$WAYLAND_DISPLAY" ]] && env_args+=("-E" "WAYLAND_DISPLAY=\$WAYLAND_DISPLAY")
+                [[ -n "\$XAUTHORITY" ]] && env_args+=("-E" "XAUTHORITY=\$XAUTHORITY")
+                [[ -n "\$XDG_RUNTIME_DIR" ]] && env_args+=("-E" "XDG_RUNTIME_DIR=\$XDG_RUNTIME_DIR")
+                [[ -n "\$DBUS_SESSION_BUS_ADDRESS" ]] && env_args+=("-E" "DBUS_SESSION_BUS_ADDRESS=\$DBUS_SESSION_BUS_ADDRESS")
+                [[ -n "\$XDG_CURRENT_DESKTOP" ]] && env_args+=("-E" "XDG_CURRENT_DESKTOP=\$XDG_CURRENT_DESKTOP")
+                [[ -n "\$XDG_DATA_DIRS" ]] && env_args+=("-E" "XDG_DATA_DIRS=\$XDG_DATA_DIRS")
+                [[ -n "\$XDG_CONFIG_DIRS" ]] && env_args+=("-E" "XDG_CONFIG_DIRS=\$XDG_CONFIG_DIRS")
+                systemd-run --user --quiet --collect "\${env_args[@]}" "\$cmd" "\$arg" >/dev/null 2>&1 &
+            else
+                "\$cmd" "\$arg" >/dev/null 2>&1 &
+            fi
+        }
+
+        local default_browser=""
+        if command -v xdg-settings >/dev/null 2>&1; then
+            default_browser=\$(xdg-settings get default-web-browser 2>/dev/null)
+            default_browser="\${default_browser%.desktop}"
+        fi
+        if [[ -n "\$default_browser" ]] && command -v "\$default_browser" >/dev/null 2>&1; then
+            run_cmd "\$default_browser" "\$url"
+            return 0
+        fi
+        for browser in "firefox" "chromium" "google-chrome-stable" "librewolf" "brave" "waterfox" "opera" "epiphany" "falkon"; do
+            if command -v "\$browser" >/dev/null 2>&1; then
+                run_cmd "\$browser" "\$url"
+                return 0
+            fi
+        done
+        run_cmd "xdg-open" "\$url"
+    }
+
+    open_url "https://archlinux.org/"
+    sleep 0.5
 fi
 EOF
                             chmod +x "$TMP_NEWS"
+                            echo "$news_ts" > "$NEWS_CACHE"
                             launch_detached "$TMP_NEWS"
                         else
+                            echo "$news_ts" > "$NEWS_CACHE"
                             launch_detached notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" \
                                 "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating."
                         fi
+                    else
+                        echo "$news_ts" > "$NEWS_CACHE"
                     fi
-
-                    rm -f "$NEWS_CACHE"
-                    echo "$news_ts" > "$NEWS_CACHE"
                 fi
             fi
         else
@@ -750,6 +829,8 @@ launch_detached() {
         [[ -n "$XDG_RUNTIME_DIR" ]] && env_args+=("-E" "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR")
         [[ -n "$DBUS_SESSION_BUS_ADDRESS" ]] && env_args+=("-E" "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS")
         [[ -n "$XDG_CURRENT_DESKTOP" ]] && env_args+=("-E" "XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP")
+        [[ -n "$XDG_DATA_DIRS" ]] && env_args+=("-E" "XDG_DATA_DIRS=$XDG_DATA_DIRS")
+        [[ -n "$XDG_CONFIG_DIRS" ]] && env_args+=("-E" "XDG_CONFIG_DIRS=$XDG_CONFIG_DIRS")
         [[ -n "$PATH" ]] && env_args+=("-E" "PATH=$PATH")
 
         systemd-run --user --quiet --collect "${env_args[@]}" "$@" 2>/dev/null && return
@@ -761,6 +842,8 @@ launch_detached() {
     env_cmd+=("DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$run_dir/bus}")
     [[ -n "$PATH" ]] && env_cmd+=("PATH=$PATH")
     [[ -n "$XAUTHORITY" ]] && env_cmd+=("XAUTHORITY=$XAUTHORITY")
+    [[ -n "$XDG_DATA_DIRS" ]] && env_cmd+=("XDG_DATA_DIRS=$XDG_DATA_DIRS")
+    [[ -n "$XDG_CONFIG_DIRS" ]] && env_cmd+=("XDG_CONFIG_DIRS=$XDG_CONFIG_DIRS")
 
     if [[ -z "$WAYLAND_DISPLAY" ]] && [[ -d "$run_dir" ]]; then
         for sock in "$run_dir"/wayland-[0-9]*; do
@@ -1709,6 +1792,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
                 TMP_NOTIFY=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_update.XXXXXX.sh")
                 cat <<EOF > "$TMP_NOTIFY"
 #!/bin/bash
+trap 'rm -f "\$0"' EXIT
 export TERMINAL="${TERMINAL:-}"
 export SCRIPT_BIN="${SCRIPT_BIN:-$(realpath "$(command -v "${BASH_SOURCE[0]:-$0}" 2>/dev/null || echo "${BASH_SOURCE[0]:-$0}")")}"
 export DISPLAY="${DISPLAY:-}"
@@ -1717,6 +1801,8 @@ export XAUTHORITY="${XAUTHORITY:-}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}"
+export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
 if [[ "\${XDG_CURRENT_DESKTOP,,}" == *"xfce"* || "\${XDG_CURRENT_DESKTOP,,}" == *"lxqt"* ]]; then
@@ -1726,8 +1812,6 @@ else
 fi
 
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
-
-rm -f "\$0"
 
 if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
     if [[ -n "\$TERMINAL" ]] && command -v "\$TERMINAL" >/dev/null 2>&1; then
