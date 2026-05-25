@@ -15,9 +15,11 @@
 
 </div>
 
-**Arch_Smart_Update** is an advanced, ultra-safe, and visually stunning bash script for managing system updates on vanilla **Arch Linux** and its derivatives (has better integration with **EndeavourOS** and **CachyOS** packages and tools, **but works great on other Arch-based distributions as well**). It acts as an intelligent shield for your package manager: analyzing pending updates, checking official news, automating backups, and utilizing a built-in **Advisor** to protect your machine from Day-1 bugs, broken dependencies, and kernel panics.
+**Arch_Smart_Update** is a bash wrapper designed to safeguard system updates on vanilla **Arch Linux** and its derivatives. Instead of updating blindly, it gives you complete control over the upgrade process by presenting **package build dates**, **package descriptions**, official **Arch news** alerts, and stability recommendations from an intelligent **Update Advisor** — enabling you to make an informed decision before delegating the actual transactions directly to **pacman**, an **AUR helper**, or **topgrade**.
 
-⚠️ **IMPORTANT DISCLAIMER:** The update recommendations provided by the Advisor are helpful guidelines, not absolute rules. As an Arch Linux user, **you are the system administrator** and hold ultimate responsibility for your machine. Always review the update list and use your own judgment before pressing "Y". This script is a powerful safety net, but it does not replace common sense. The author is not responsible for any broken systems, unbootable kernels, or data loss!
+The script also supports distribution-specific utilities on **EndeavourOS** (such as `eos-update`) and **CachyOS** (such as `arch-update`), while remaining fully compatible with any other Arch-based system.
+
+⚠️ **IMPORTANT DISCLAIMER:** The update recommendations provided by the Advisor are helpful guidelines, not absolute rules. As an Arch Linux user, **you are the system administrator** and hold ultimate responsibility for your machine. Always review the update list and use your own judgment before pressing "Y". The author is not responsible for any broken systems, unbootable kernels, or data loss!
 
 ---
 
@@ -28,9 +30,7 @@
 
 ## Daemon preview (optional, can be activated on first launch)
 
-![03](https://github.com/user-attachments/assets/5822997c-5cc7-4e6e-9338-4eedc3af17aa)
-
-![04](https://github.com/user-attachments/assets/b63b8100-091d-42fa-b6c5-6afe0cce7fd6)
+![03](https://github.com/user-attachments/assets/b6e3e434-023f-468a-858e-9d0c7290fb40)
 
 ---
 
