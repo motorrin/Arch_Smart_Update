@@ -410,7 +410,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
             export "$key=$val"
         done < <(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_CURRENT_DESKTOP|XAUTHORITY|XDG_DATA_DIRS|XDG_CONFIG_DIRS)=')
     fi
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
     if [[ -z "$DISPLAY" || -z "$XAUTHORITY" || -z "$XDG_CURRENT_DESKTOP" || -z "$DBUS_SESSION_BUS_ADDRESS" || -z "$XDG_DATA_DIRS" ]]; then
@@ -675,10 +675,26 @@ except Exception:
             fi
 
             if [[ "$DAEMON_MODE" == true ]]; then
+                local first_run_this_boot=false
+                
+                local session_dir="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
+                if [[ ! -d "$session_dir" || ! -w "$session_dir" ]]; then
+                    session_dir="/tmp"
+                fi
+                local BOOT_SESSION_FILE="${session_dir}/asu_boot_session_${EUID}.active"
+
+                if [[ ! -f "$BOOT_SESSION_FILE" ]]; then
+                    first_run_this_boot=true
+                fi
+
                 local should_notify=false
                 if (( news_ts != OLD_NEWS_TS )); then
                     should_notify=true
+                elif [[ "$NEWS_SILENCED" == "false" ]] && [[ "$first_run_this_boot" == "true" ]]; then
+                    should_notify=true
                 fi
+
+                touch "$BOOT_SESSION_FILE" 2>/dev/null
 
                 if [[ "$should_notify" == "true" ]]; then
                     if command -v notify-send >/dev/null 2>&1; then
@@ -837,7 +853,7 @@ launch_detached() {
     fi
 
     local env_cmd=(env)
-    local run_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    local run_dir="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
     env_cmd+=("XDG_RUNTIME_DIR=$run_dir")
     env_cmd+=("DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$run_dir/bus}")
     [[ -n "$PATH" ]] && env_cmd+=("PATH=$PATH")
