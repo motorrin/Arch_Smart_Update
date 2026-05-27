@@ -1884,13 +1884,16 @@ check_pending_updates() {
     echo "$pending"
 }
 
-HAS_EOS=false
-HAS_CACHY=false
-HAS_TOPGRADE=false
+BEST_UPDATE_TOOL=""
+for tool in eos-update cachy-update arch-update; do
+    if command -v "$tool" &>/dev/null; then
+        BEST_UPDATE_TOOL="$tool"
+        break
+    fi
+done
 
-command -v eos-update &> /dev/null && HAS_EOS=true
-command -v arch-update &> /dev/null && HAS_CACHY=true
-command -v topgrade &> /dev/null && HAS_TOPGRADE=true
+HAS_TOPGRADE=false
+command -v topgrade &>/dev/null && HAS_TOPGRADE=true
 
 if [[ ${#CUSTOM_CMDS[@]} -gt 0 ]]; then
     if [[ ${#CUSTOM_CMDS[@]} -eq 1 ]]; then
@@ -1898,14 +1901,12 @@ if [[ ${#CUSTOM_CMDS[@]} -gt 0 ]]; then
     else
         PROMPT_CMD="Custom config (${#CUSTOM_CMDS[@]} commands)"
     fi
-elif { $HAS_EOS || $HAS_CACHY; } && $HAS_TOPGRADE; then
-    if $HAS_EOS; then PROMPT_CMD="eos-update && topgrade"
-    else PROMPT_CMD="arch-update && topgrade"; fi
-elif $HAS_EOS || $HAS_CACHY; then
-    if $HAS_EOS; then PROMPT_CMD="eos-update"
-    else PROMPT_CMD="arch-update"; fi
+elif [[ -n "$BEST_UPDATE_TOOL" && "$HAS_TOPGRADE" == "true" ]]; then
+    PROMPT_CMD="$BEST_UPDATE_TOOL && topgrade"
+elif [[ -n "$BEST_UPDATE_TOOL" ]]; then
+    PROMPT_CMD="$BEST_UPDATE_TOOL"
     [[ -n "$AUR_HELPER" ]] && PROMPT_CMD="$PROMPT_CMD (fallback: $(echo "$AUR_HELPER" | awk '{print $1}'))"
-elif $HAS_TOPGRADE; then
+elif [[ "$HAS_TOPGRADE" == "true" ]]; then
     PROMPT_CMD="topgrade"
 else
     if [[ -n "$AUR_HELPER" ]]; then
@@ -1932,7 +1933,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 
         has_pkg_mgr=false
         for cmd in "${CUSTOM_CMDS[@]}"; do
-            if [[ "$cmd" =~ (pacman|yay|paru|eos-update|arch-update|topgrade|pikaur|trizen|aura|pacaur) ]]; then
+            if [[ "$cmd" =~ (pacman|yay|paru|eos-update|cachy-update|arch-update|topgrade|pikaur|trizen|aura|pacaur) ]]; then
                 has_pkg_mgr=true
                 break
             fi
@@ -2000,8 +2001,8 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             echo -e "${yellow}Warning: Failed to update keyrings. Proceeding anyway...${reset}\n"
         fi
 
-        if { $HAS_EOS || $HAS_CACHY; } && $HAS_TOPGRADE; then
-            if $HAS_EOS; then tool_name="eos-update"; else tool_name="arch-update"; fi
+        if [[ -n "$BEST_UPDATE_TOOL" && "$HAS_TOPGRADE" == "true" ]]; then
+            tool_name="$BEST_UPDATE_TOOL"
 
             echo -e "${blue}${bold}Running $tool_name (Keyrings & Packages)...${reset}\n"
             $tool_name
@@ -2024,8 +2025,8 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
                 fi
             fi
 
-        elif $HAS_EOS || $HAS_CACHY; then
-            if $HAS_EOS; then tool_name="eos-update"; else tool_name="arch-update"; fi
+        elif [[ -n "$BEST_UPDATE_TOOL" ]]; then
+            tool_name="$BEST_UPDATE_TOOL"
 
             echo -e "${blue}${bold}Running $tool_name...${reset}\n"
             $tool_name
@@ -2063,7 +2064,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
                 fi
             fi
 
-        elif $HAS_TOPGRADE; then
+        elif [[ "$HAS_TOPGRADE" == "true" ]]; then
             echo -e "${blue}${bold}Running Topgrade (System, AUR, Firmware, etc.)...${reset}\n"
             topgrade && UPDATE_SUCCESS=true
 
