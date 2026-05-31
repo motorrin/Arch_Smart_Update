@@ -26,7 +26,7 @@ log_step() {
 }
 
 # --- 1.2 Dependency Check ---
-for cmd in python3 tar awk stat fuser curl script; do
+for cmd in python3 tar awk stat fuser curl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo -e "${red}Error: Required command '$cmd' is not installed.${reset}"
         if [[ "$cmd" == "fuser" ]]; then
@@ -829,11 +829,7 @@ backup_pacman_db() {
 }
 
 run_interactive_task() {
-    if [ -t 0 ]; then
-        SHELL=/bin/bash script -e -q -f -c "$1" /dev/null
-    else
-        /bin/bash -c "$1"
-    fi
+    /bin/bash -c "$1"
 }
 
 # --- 5. Mirror Refresh Function ---
@@ -944,98 +940,99 @@ refresh_mirrors() {
     echo -e "${dim}Command: ${white}$ACTUAL_CMD${reset}"
     echo -e "${dim}Can be changed in the settings.conf file.${reset}"
     echo -ne "${white}Refresh mirrors now? [Y/n]: ${reset}"
-    read -r ans
-    if [[ "$ans" =~ ^[Yy]$ || -z "$ans" ]]; then
+    if read -r ans; then
+        if [[ "$ans" =~ ^[Yy]$ || -z "$ans" ]]; then
 
-        if command -v eos-rankmirrors &>/dev/null; then
-            echo -e "${blue}Ranking EndeavourOS mirrors (Timeout: 5s)...${reset}"
-            if sudo eos-rankmirrors -t 5 > /dev/null; then
-                echo -e "${green}EndeavourOS mirrors updated.${reset}"
-            else
-                echo -e "${red}Failed to rank EOS mirrors.${reset}"
+            if command -v eos-rankmirrors &>/dev/null; then
+                echo -e "${blue}Ranking EndeavourOS mirrors (Timeout: 5s)...${reset}"
+                if sudo eos-rankmirrors -t 5 > /dev/null; then
+                    echo -e "${green}EndeavourOS mirrors updated.${reset}"
+                else
+                    echo -e "${red}Failed to rank EOS mirrors.${reset}"
+                fi
             fi
-        fi
 
-        if command -v cachyos-rate-mirrors &>/dev/null; then
-            echo -e "${blue}Ranking CachyOS mirrors...${reset}"
-            if sudo cachyos-rate-mirrors; then
-                echo -e "${green}CachyOS mirrors updated.${reset}"
-            else
-                echo -e "${red}Failed to rank CachyOS mirrors.${reset}"
+            if command -v cachyos-rate-mirrors &>/dev/null; then
+                echo -e "${blue}Ranking CachyOS mirrors...${reset}"
+                if sudo cachyos-rate-mirrors; then
+                    echo -e "${green}CachyOS mirrors updated.${reset}"
+                else
+                    echo -e "${red}Failed to rank CachyOS mirrors.${reset}"
+                fi
             fi
-        fi
 
-        if command -v reflector &>/dev/null; then
-            echo -e "\n${blue}Running reflector for Arch Linux...${reset}"
+            if command -v reflector &>/dev/null; then
+                echo -e "\n${blue}Running reflector for Arch Linux...${reset}"
 
-            local REFL_SUCCESS=false
+                local REFL_SUCCESS=false
 
-            run_refl_and_check() {
-                local cmd="$1"
+                run_refl_and_check() {
+                    local cmd="$1"
 
-                bash -c "$cmd" 2>&1 | tee "$REFL_LOG"
-                local exit_code=${PIPESTATUS[0]}
+                    bash -c "$cmd" 2>&1 | tee "$REFL_LOG"
+                    local exit_code=${PIPESTATUS[0]}
 
-                local err_count
-                err_count=$(grep -cEi "warning: failed to rate|timed out|error" "$REFL_LOG" 2>/dev/null || true)
+                    local err_count
+                    err_count=$(grep -cEi "warning: failed to rate|timed out|error" "$REFL_LOG" 2>/dev/null || true)
 
-                if [[ $exit_code -ne 0 ]] && (( err_count >= 15 )); then
-                    echo -e "\n${yellow}Reflector has encountered problems: $err_count mirrors are unavailable or have timed out.${reset}"
-                    echo -e "${yellow}The connection might be unstable, or the mirrors are currently down.${reset}"
+                    if [[ $exit_code -ne 0 ]] && (( err_count >= 15 )); then
+                        echo -e "\n${yellow}Reflector has encountered problems: $err_count mirrors are unavailable or have timed out.${reset}"
+                        echo -e "${yellow}The connection might be unstable, or the mirrors are currently down.${reset}"
 
-                    local force_cont
-                    echo -ne "${white}Continue with the old mirrorlist anyway? [y/N]: ${reset}"
-                    read -r force_cont
+                        local force_cont
+                        echo -ne "${white}Continue with the old mirrorlist anyway? [y/N]: ${reset}"
+                        read -r force_cont
 
-                    if [[ ! "$force_cont" =~ ^[Yy]$ ]]; then
-                        echo -e "${red}The update was interrupted by the user.${reset}"
-                        exit 1
+                        if [[ ! "$force_cont" =~ ^[Yy]$ ]]; then
+                            echo -e "${red}The update was interrupted by the user.${reset}"
+                            exit 1
+                        fi
+
+                        return 255
                     fi
 
-                    return 255
+                    return "$exit_code"
+                }
+
+                if [[ -n "$CUSTOM_REFLECTOR" ]]; then
+                    echo -e "${dim}Executing custom reflector command...${reset}"
+                    run_refl_and_check "$CUSTOM_REFLECTOR"
+                    local refl_res=$?
+                    if [[ $refl_res -eq 0 ]]; then
+                        local new_mirror
+                        new_mirror=$(get_current_mirror)
+                        echo -e "${green}Custom Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
+                        REFL_SUCCESS=true
+                    elif [[ $refl_res -eq 255 ]]; then
+                        echo -e "${yellow}Proceeding with old mirrors...${reset}\n"
+                        return 0
+                    else
+                        echo -e "${yellow}Custom reflector command failed. Falling back to default...${reset}"
+                    fi
                 fi
 
-                return "$exit_code"
-            }
-
-            if [[ -n "$CUSTOM_REFLECTOR" ]]; then
-                echo -e "${dim}Executing custom reflector command...${reset}"
-                run_refl_and_check "$CUSTOM_REFLECTOR"
-                local refl_res=$?
-                if [[ $refl_res -eq 0 ]]; then
-                    local new_mirror
-                    new_mirror=$(get_current_mirror)
-                    echo -e "${green}Custom Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
-                    REFL_SUCCESS=true
-                elif [[ $refl_res -eq 255 ]]; then
-                    echo -e "${yellow}Proceeding with old mirrors...${reset}\n"
-                    return 0
-                else
-                    echo -e "${yellow}Custom reflector command failed. Falling back to default...${reset}"
+                if ! $REFL_SUCCESS; then
+                    echo -e "${dim}Ranking mirrors... WARNINGS are expected.${reset}"
+                    run_refl_and_check "$DEFAULT_REFLECTOR"
+                    local refl_res=$?
+                    if [[ $refl_res -eq 0 ]]; then
+                        local new_mirror
+                        new_mirror=$(get_current_mirror)
+                        echo -e "${green}Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
+                        return 0
+                    elif [[ $refl_res -eq 255 ]]; then
+                        echo -e "${yellow}Proceeding with old mirrors...${reset}\n"
+                        return 0
+                    else
+                        echo -e "${red}Reflector failed (Try changing the settings.conf settings).${reset}\n"
+                        return 1
+                    fi
                 fi
+                return 0
+            else
+                echo -e "${red}Error: 'reflector' is not installed.${reset}\n"
+                return 1
             fi
-
-            if ! $REFL_SUCCESS; then
-                echo -e "${dim}Ranking mirrors... WARNINGS are expected.${reset}"
-                run_refl_and_check "$DEFAULT_REFLECTOR"
-                local refl_res=$?
-                if [[ $refl_res -eq 0 ]]; then
-                    local new_mirror
-                    new_mirror=$(get_current_mirror)
-                    echo -e "${green}Arch mirrors updated successfully. New mirror: ${white}$new_mirror${reset}\n"
-                    return 0
-                elif [[ $refl_res -eq 255 ]]; then
-                    echo -e "${yellow}Proceeding with old mirrors...${reset}\n"
-                    return 0
-                else
-                    echo -e "${red}Reflector failed (Try changing the settings.conf settings).${reset}\n"
-                    return 1
-                fi
-            fi
-            return 0
-        else
-            echo -e "${red}Error: 'reflector' is not installed.${reset}\n"
-            return 1
         fi
     fi
     return 1
@@ -1927,7 +1924,10 @@ fi
 sudo -v
 
 echo -ne "\n${bold}${white}Apply updates?${reset} ${dim}(${PROMPT_CMD})${reset} [Y/n]: "
-read -r answer
+if ! read -r answer; then
+    echo -e "${red}Input stream closed. Cancelling.${reset}\n"
+    exit 1
+fi
 
 if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
     sudo -v
@@ -1951,9 +1951,10 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             echo -e "${yellow}Warning: Your custom commands do not seem to include a system package manager.${reset}"
             echo -e "${dim}By default, custom commands OVERRIDE standard system updates.${reset}"
             echo -ne "${white}Would you like to also run standard updates AFTER your custom commands? [Y/n]: ${reset}"
-            read -r ans_std
-            if [[ "$ans_std" =~ ^[Yy]$ || -z "$ans_std" ]]; then
-                RUN_STANDARD=true
+            if read -r ans_std; then
+                if [[ "$ans_std" =~ ^[Yy]$ || -z "$ans_std" ]]; then
+                    RUN_STANDARD=true
+                fi
             fi
             echo ""
         fi
@@ -2054,18 +2055,18 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
                     fi
 
                     echo -ne "${white}Run $helper_bin to apply remaining updates? [Y/n]: ${reset}"
-                    read -r force_aur
+                    if read -r force_aur; then
+                        if [[ "$force_aur" =~ ^[Yy]$ || -z "$force_aur" ]]; then
+                            run_interactive_task "$AUR_HELPER $aur_flags"
 
-                    if [[ "$force_aur" =~ ^[Yy]$ || -z "$force_aur" ]]; then
-                        run_interactive_task "$AUR_HELPER $aur_flags"
-
-                        if [[ $? -eq 0 && -z "$(check_pending_updates)" ]]; then
-                            UPDATE_SUCCESS=true
+                            if [[ $? -eq 0 && -z "$(check_pending_updates)" ]]; then
+                                UPDATE_SUCCESS=true
+                            else
+                                echo -e "\n${red}Some updates are still pending or failed.${reset}"
+                            fi
                         else
-                            echo -e "\n${red}Some updates are still pending or failed.${reset}"
+                            echo -e "${dim}Skipping remaining updates.${reset}\n"
                         fi
-                    else
-                        echo -e "${dim}Skipping remaining updates.${reset}\n"
                     fi
                 elif [[ -n "$pending_updates" ]]; then
                     echo -e "\n${red}Updates remaining, but no AUR helper detected to process them.${reset}"
