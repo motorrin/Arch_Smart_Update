@@ -1456,7 +1456,7 @@ total_download_size="0.00 MiB"
 if [[ -s "$OUTPUT_FILE" ]]; then
     # shellcheck disable=SC2016
     total_download_size=$(env LC_ALL=C awk -F'\t' '{
-        if ($8 != "AUR" && $9 != "N/A" && $9 != "") {
+        if (tolower($8) != "aur" && $9 != "N/A" && $9 != "") {
             split($9, a, " ")
             val = a[1]
             unit = a[2]
@@ -1554,7 +1554,7 @@ env LC_ALL=C sort -n "$OUTPUT_FILE" | while IFS=$'\t' read -r key diff_hours pkg
     fi
 
     printf -v f_repo "%-${w_repo}s" "$repo"
-    if [[ "$repo" == "AUR" ]]; then
+    if [[ "${repo,,}" == "aur" ]]; then
         out_repo="${magenta}${f_repo}${reset}"
     else
         out_repo="${dim}${f_repo}${reset}"
@@ -1629,7 +1629,7 @@ give_advice() {
     local DE_PATTERN="^(plasma-|gnome-|hyprland|kwin|mutter|cinnamon|xfce4|qt[56]-|gtk[34]|kf[56]-|frameworkintegration)"
 
     while IFS=$'\t' read -r _ _ pkg_level upd_type pkgname _ _ repo _ _ epoch_new _ _; do
-        [[ "$repo" == "AUR" ]] && continue
+        [[ "${repo,,}" == "aur" ]] && continue
 
         local pkg_ts=${epoch_new:-0}
         (( pkg_ts == 0 )) && continue
