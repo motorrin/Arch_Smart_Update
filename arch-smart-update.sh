@@ -1170,8 +1170,18 @@ while (( attempt <= MAX_RETRIES )); do
             PACMAN_OPTS="--disable-sandbox"
         fi
 
-        env LC_ALL=C fakeroot pacman $PACMAN_OPTS -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
-        PACMAN_EXIT=${PIPESTATUS[0]}
+        if command -v timeout >/dev/null 2>&1; then
+            timeout -k 10s -s INT 600 env LC_ALL=C fakeroot pacman $PACMAN_OPTS -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
+            PACMAN_EXIT=${PIPESTATUS[0]}
+
+            if [[ "$PACMAN_EXIT" == "124" || "$PACMAN_EXIT" == "137" ]]; then
+                log_step "Error: Database synchronization timed out after 10 minutes in daemon mode."
+                exit 1
+            fi
+        else
+            env LC_ALL=C fakeroot pacman $PACMAN_OPTS -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
+            PACMAN_EXIT=${PIPESTATUS[0]}
+        fi
     else
         sudo env LC_ALL=C pacman -Sy --dbpath "$CHECK_DB" --logfile /dev/null 2>&1 | tee "$SYNC_LOG"
         PACMAN_EXIT=${PIPESTATUS[0]}
