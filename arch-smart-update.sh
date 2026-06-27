@@ -531,10 +531,14 @@ if [[ "$DAEMON_MODE" == true ]]; then
     if [[ -z "$DISPLAY" ]]; then
         for sock in /tmp/.X11-unix/X[0-9]*; do
             if [[ -S "$sock" ]]; then
-                export DISPLAY=":${sock#/tmp/.X11-unix/X}"
+                export DISPLAY=":${sock:16}"
                 break
             fi
         done
+    fi
+
+    if [[ "${XDG_SESSION_TYPE,,}" == "x11" ]] || [[ "${XDG_CURRENT_DESKTOP,,}" =~ (xfce|lxqt|mate|cinnamon|i3) ]]; then
+        unset WAYLAND_DISPLAY
     fi
 
     NEXT_CHECK_FILE="$CONFIG_DIR/next_check.conf"
