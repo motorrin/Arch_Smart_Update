@@ -37,16 +37,15 @@ if [[ "$EUID" -eq 0 ]]; then
     exit 1
 fi
 
+exec {ASU_TTY_OUT}>&1 {ASU_TTY_ERR}>&2
+
 log_step() {
     echo -e "${dim}[$(date +%T)] $1${reset}"
 }
 
-for cmd in python3 tar awk stat fuser curl; do
+for cmd in python3 tar awk stat curl zstd; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo -e "${red}Error: Required command '$cmd' is not installed.${reset}"
-        if [[ "$cmd" == "fuser" ]]; then
-            echo -e "${gray}Please install the 'psmisc' package: sudo pacman -S psmisc${reset}"
-        fi
         exit 1
     fi
 done
@@ -96,8 +95,14 @@ update_from_github() {
     filename=$(basename "$file_path")
     local tmp_file
     tmp_file=$(mktemp "/tmp/${filename}.XXXXXX")
+    local conn_timeout=2
+    local max_time=4
+    if [[ ! -f "$file_path" ]]; then
+        conn_timeout=5
+        max_time=10
+    fi
 
-    if curl -sLfo "$tmp_file" --connect-timeout 5 --max-time 10 "$url"; then
+    if curl -sLfo "$tmp_file" --connect-timeout "$conn_timeout" --max-time "$max_time" "$url"; then
         if [[ -n "$expected_string" ]] && ! grep -q "$expected_string" "$tmp_file"; then
             rm -f "$tmp_file"
             [[ ! -f "$file_path" ]] && echo -e "${red}Failed to download $filename (Invalid format / Captive Portal)${reset}"
@@ -157,15 +162,28 @@ parse_bash_array() {
     local arr_name=$2
     awk -v var="$arr_name" '
         BEGIN { in_arr=0 }
-        { gsub(/#.*/, "") }
+        { sub(/^[[:space:]]*#.*/, "") }
         $0 ~ "^"var"(\\+)?=\\s*\\(" { in_arr=1; sub(/^.*\(/, "") }
         in_arr {
-            if (match($0, /\)/)) {
+            tmp = $0
+            while (match(tmp, /"[^"]*"|\047[^\047]*\047/)) {
+                len = RLENGTH
+                replacement = ""
+                for (i=1; i<=len; i++) replacement = replacement " "
+                tmp = substr(tmp, 1, RSTART-1) replacement substr(tmp, RSTART+RLENGTH)
+            }
+            idx = index(tmp, "#")
+            if (idx > 0) {
+                tmp = substr(tmp, 1, idx - 1)
+                $0 = substr($0, 1, idx - 1)
+            }
+            if (match(tmp, /\)/)) {
                 $0 = substr($0, 1, RSTART-1)
                 in_arr=0
             }
             while (match($0, /"[^"]*"|\047[^\047]*\047|[^ \t\n\r"\047()]+/)) {
                 val = substr($0, RSTART, RLENGTH)
+                if (val ~ /^#/) break
                 gsub(/^["\047]|["\047]$/, "", val)
                 if (val != "") print val
                 $0 = substr($0, RSTART+RLENGTH)
@@ -174,17 +192,31 @@ parse_bash_array() {
     ' "$file"
 }
 
+mkdir -p "$CONFIG_DIR"
+
 if ! $DAEMON_MODE; then
     echo -e "${blue}${bold}:: Arch Smart Update${reset}"
     echo -e "${dim}Config path: ${white}${SETTINGS_CONF}${reset}\n"
+    if command -v snapper &>/dev/null && ! pacman -Qq snap-pac &>/dev/null; then
+        if [[ ! -f "$CONFIG_DIR/.snapper_warned" ]]; then
+            echo -e "${yellow}Notice: Snapper detected, but ${white}snap-pac${yellow} is not installed.${reset}"
+            echo -e "${gray}We highly recommend installing 'snap-pac' to automatically create${reset}"
+            echo -e "${gray}Btrfs pre/post snapshots on every update: ${white}sudo pacman -S snap-pac${reset}\n"
+            touch "$CONFIG_DIR/.snapper_warned" 2>/dev/null
+        fi
+    fi
 fi
 
 echo -e "${dim}Checking for configuration updates...${reset}"
 
-update_from_github "$PKG_CONF" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/packages.conf" "NUCLEAR_PKGS"
-update_from_github "$SETTINGS_DEFAULT" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/settings.conf" "PROMPT_MIRROR_REFRESH"
-update_from_github "$DAEMON_TEMPLATE" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/daemon.template" "[TimerTemplate]"
-update_from_github "$ICON_PATH" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/ASU.png" ""
+if curl -sI --connect-timeout 2 --max-time 4 "https://raw.githubusercontent.com" >/dev/null 2>&1; then
+    update_from_github "$PKG_CONF" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/packages.conf" "NUCLEAR_PKGS"
+    update_from_github "$SETTINGS_DEFAULT" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/settings.conf" "PROMPT_MIRROR_REFRESH"
+    update_from_github "$DAEMON_TEMPLATE" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/daemon.template" "[TimerTemplate]"
+    update_from_github "$ICON_PATH" "https://raw.githubusercontent.com/motorrin/Arch_Smart_Update/main/ASU.png" ""
+else
+    echo -e "${dim}GitHub is unreachable. Skipping configuration updates...${reset}"
+fi
 
 [[ -f "$ICON_PATH" ]] && chmod 644 "$ICON_PATH" 2>/dev/null
 
@@ -197,10 +229,12 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     setup_ans="Y"
     daemon_ans="N"
     clean_ans="N"
+    log_ans="N"
 
     prompt_user "Allow mirror ranking option before update (with confirmation)?" "Y/n" setup_ans
     prompt_user "Enable background update checker?" "y/N" daemon_ans
     prompt_user "Enable automatic post-update system cleanup?" "y/N" clean_ans
+    prompt_user "Enable update log generation in ~/.config/arch-smart-update/logs/?" "y/N" log_ans
 
     echo ""
 
@@ -231,6 +265,14 @@ if [[ ! -f "$SETTINGS_CONF" && -f "$SETTINGS_DEFAULT" ]]; then
     else
         sed -i 's/^ENABLE_POST_CLEANUP=.*/ENABLE_POST_CLEANUP=false/' "$SETTINGS_CONF"
         echo -e "${dim}Post-update cleanup disabled.${reset}\n"
+    fi
+
+    if [[ "$log_ans" =~ ^[Yy]$ ]]; then
+        sed -i 's/^GENERATE_LOGS=.*/GENERATE_LOGS=true/' "$SETTINGS_CONF"
+        echo -e "${dim}Log generation enabled.${reset}\n"
+    else
+        sed -i 's/^GENERATE_LOGS=.*/GENERATE_LOGS=false/' "$SETTINGS_CONF"
+        echo -e "${dim}Log generation disabled.${reset}\n"
     fi
 fi
 
@@ -437,10 +479,11 @@ if [[ "$DAEMON_MODE" == true ]]; then
     export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
     export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 
-    if [[ -z "$DISPLAY" || -z "$XAUTHORITY" || -z "$XDG_CURRENT_DESKTOP" || -z "$DBUS_SESSION_BUS_ADDRESS" || -z "$XDG_DATA_DIRS" ]]; then
-        for pid in $(pgrep -u "$EUID" 2>/dev/null); do
+    if [[ -z "$DBUS_SESSION_BUS_ADDRESS" || ( -z "$DISPLAY" && -z "$WAYLAND_DISPLAY" ) ]]; then
+        for pid in $(pgrep -u "$EUID" 2>/dev/null | sort -rn); do
             if [[ -r "/proc/$pid/environ" ]]; then
                 p_disp=""
+                p_wayland=""
                 p_xauth=""
                 p_desktop=""
                 p_dbus=""
@@ -449,6 +492,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
                 while IFS='=' read -r -d '' env_key env_val; do
                     case "$env_key" in
                         DISPLAY) p_disp="$env_val" ;;
+                        WAYLAND_DISPLAY) p_wayland="$env_val" ;;
                         XAUTHORITY) p_xauth="$env_val" ;;
                         XDG_CURRENT_DESKTOP) p_desktop="$env_val" ;;
                         DBUS_SESSION_BUS_ADDRESS) p_dbus="$env_val" ;;
@@ -457,8 +501,9 @@ if [[ "$DAEMON_MODE" == true ]]; then
                     esac
                 done < <(cat "/proc/$pid/environ" 2>/dev/null)
 
-                if [[ -n "$p_disp" ]]; then
-                    [[ -z "$DISPLAY" ]] && export DISPLAY="$p_disp"
+                if [[ -n "$p_disp" || -n "$p_wayland" ]]; then
+                    [[ -z "$DISPLAY" && -n "$p_disp" ]] && export DISPLAY="$p_disp"
+                    [[ -z "$WAYLAND_DISPLAY" && -n "$p_wayland" ]] && export WAYLAND_DISPLAY="$p_wayland"
                     [[ -z "$XAUTHORITY" && -n "$p_xauth" ]] && export XAUTHORITY="$p_xauth"
                     [[ -z "$XDG_CURRENT_DESKTOP" && -n "$p_desktop" ]] && export XDG_CURRENT_DESKTOP="$p_desktop"
                     [[ -z "$DBUS_SESSION_BUS_ADDRESS" && -n "$p_dbus" ]] && export DBUS_SESSION_BUS_ADDRESS="$p_dbus"
@@ -508,7 +553,13 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
     LOG_DIR="$CONFIG_DIR/logs"
     mkdir -p "$LOG_DIR"
 
-    latest_log=$(find "$LOG_DIR" -maxdepth 1 -name 'log_*' 2>/dev/null | grep -E 'log_[0-9]+$' | sort -V | tail -n 1)
+    if [[ "$DAEMON_MODE" == true ]]; then
+        log_prefix="daemon_log"
+    else
+        log_prefix="log"
+    fi
+
+    latest_log=$(find "$LOG_DIR" -maxdepth 1 -name "${log_prefix}_*" 2>/dev/null | grep -E "/${log_prefix}_[0-9]+$" | sort -V | tail -n 1)
     if [[ -z "$latest_log" ]]; then
         next_num=1
     else
@@ -516,7 +567,7 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
         next_num=$(( 10#$latest_num + 1 ))
     fi
 
-    printf -v log_name "log_%06d" "$next_num"
+    printf -v log_name "${log_prefix}_%06d" "$next_num"
     LOG_FILE="$LOG_DIR/$log_name"
 
     {
@@ -533,9 +584,12 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
         exec > >(tee -a "$LOG_FILE") 2>&1
     fi
 
-    mapfile -t existing_logs < <(find "$LOG_DIR" -maxdepth 1 -name 'log_[0-9][0-9][0-9][0-9][0-9][0-9]' 2>/dev/null | sort -V)
-    if (( ${#existing_logs[@]} > MAX_LOG_NUMBERS )); then
-        remove_count=$(( ${#existing_logs[@]} - MAX_LOG_NUMBERS ))
+    SANITIZED_MAX_LOGS=${MAX_LOG_NUMBERS:-5}
+    [[ "$SANITIZED_MAX_LOGS" =~ ^[0-9]+$ ]] || SANITIZED_MAX_LOGS=5
+
+    mapfile -t existing_logs < <(find "$LOG_DIR" -maxdepth 1 -name "${log_prefix}_*" 2>/dev/null | grep -E "/${log_prefix}_[0-9]+$" | sort -V)
+    if (( ${#existing_logs[@]} > SANITIZED_MAX_LOGS )); then
+        remove_count=$(( ${#existing_logs[@]} - SANITIZED_MAX_LOGS ))
         for (( i=0; i<remove_count; i++ )); do
             rm -f "${existing_logs[$i]}"
         done
@@ -543,15 +597,10 @@ if [[ "${GENERATE_LOGS,,}" == "true" ]]; then
 fi
 
 # --- 3. Temporary Files ---
-OUTPUT_FILE=$(mktemp)
-SYNC_LOG=$(mktemp)
-REFL_LOG=$(mktemp)
-
-if ! CHECK_DB=$(mktemp -d /tmp/checkupdates-db.XXXXXX); then
-    echo -e "${red}Error: Could not create temp db directory.${reset}"
-    exit 1
-fi
-chmod 755 "$CHECK_DB"
+OUTPUT_FILE=""
+SYNC_LOG=""
+REFL_LOG=""
+CHECK_DB=""
 
 # shellcheck disable=SC2329
 cleanup() {
@@ -577,6 +626,16 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+OUTPUT_FILE=$(mktemp) || exit 1
+SYNC_LOG=$(mktemp) || exit 1
+REFL_LOG=$(mktemp) || exit 1
+
+if ! CHECK_DB=$(mktemp -d /tmp/checkupdates-db.XXXXXX); then
+    echo -e "${red}Error: Could not create temp db directory.${reset}"
+    exit 1
+fi
+chmod 755 "$CHECK_DB"
 
 # --- 4. Helper Functions ---
 get_update_type() {
@@ -606,6 +665,7 @@ get_update_type() {
     read -ra nums_new <<< "${up_new//[^0-9]/ }"
 
     local len=${#nums_new[@]}
+    local i
     for (( i=0; i<len; i++ )); do
         local n_old=${nums_old[$i]}
         local n_new=${nums_new[$i]}
@@ -672,7 +732,7 @@ except Exception:
         now_time=$(date +%s)
         diff_hours=$(( (now_time - news_ts) / 3600 ))
 
-        if (( diff_hours < 336 )); then # 14 days
+        if (( diff_hours < 999999 )); then # 14 days
             local NEWS_CACHE="$CONFIG_DIR/news.cache"
             local OLD_NEWS_TS=0
             local NEWS_SILENCED=false
@@ -729,7 +789,7 @@ except Exception:
 
                         if notify-send --help 2>&1 | grep -q -- "--action"; then
                             local TMP_NEWS
-                            TMP_NEWS=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_news.XXXXXX.sh")
+                            TMP_NEWS=$(mktemp --suffix=.sh "${XDG_RUNTIME_DIR:-/tmp}/asu_news.XXXXXX")
                             cat <<EOF > "$TMP_NEWS"
 #!/bin/bash
 trap 'rm -f "\$0"' EXIT
@@ -743,13 +803,22 @@ export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
+notif_daemon=\$(dbus-send --session --print-reply --dest=org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications.GetServerInformation 2>/dev/null | awk -F'"' '/string/ {print \$2; exit}')
+notif_daemon=\${notif_daemon,,}
+desktop_env=\${XDG_CURRENT_DESKTOP,,}
+
+use_single_action=false
+if [[ "\$notif_daemon" =~ (mako|dunst|lxqt|xfce|fnott|wired) ]] || [[ "\$desktop_env" =~ (sway|i3|hyprland|niri|lxqt|xfce|wlroots) ]]; then
+    use_single_action=true
+fi
+
 is_xfce_lxqt=false
-if [[ "\${XDG_CURRENT_DESKTOP,,}" == *"xfce"* || "\${XDG_CURRENT_DESKTOP,,}" == *"lxqt"* ]]; then
+if [[ "\$notif_daemon" == *"xfce"* || "\$notif_daemon" == *"lxqt"* || "\$desktop_env" == *"xfce"* || "\$desktop_env" == *"lxqt"* ]]; then
     is_xfce_lxqt=true
 fi
 
-if [[ "\$is_xfce_lxqt" == "true" ]]; then
-    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="read=Read News" --action="silence=Silence" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
+if [[ "\$use_single_action" == "true" ]]; then
+    action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="silence=Silence" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 else
     action=\$(notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" --action="default=Read News" --action="read=Read News" --action="silence=Silence" "Attention: Arch News detected!" "Published $diff_hours h. ago.\nCheck archlinux.org before updating.")
 fi
@@ -829,21 +898,17 @@ EOF
 backup_pacman_db() {
     local BACKUP_DIR="/var/lib/pacman/backup"
     local KEEP_COPIES=${MAX_BACKUP_COPIES:-5}
-
+    [[ "$KEEP_COPIES" =~ ^[0-9]+$ ]] || KEEP_COPIES=5
     log_step "Creating Pacman DB backup..."
-
     if [[ ! -d "$BACKUP_DIR" ]]; then
         sudo mkdir -p "$BACKUP_DIR"
     fi
-
     local BACKUP_DATE
     BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-    local BACKUP_FILE="$BACKUP_DIR/pacman_database_$BACKUP_DATE.tar.gz"
-
-    if sudo tar --xattrs --warning=no-file-changed -czf "$BACKUP_FILE" -C /var/lib/pacman/ local; then
+    local BACKUP_FILE="$BACKUP_DIR/pacman_database_$BACKUP_DATE.tar.zst"
+    if sudo tar --xattrs --warning=no-file-changed -I 'zstd -3' -cf "$BACKUP_FILE" -C /var/lib/pacman/ local; then
         echo -e "${green}Backup created: ${white}$(basename "$BACKUP_FILE")${reset}"
-
-        sudo bash -c "find \"$BACKUP_DIR\" -maxdepth 1 -type f -name 'pacman_database_*.tar.gz' -printf '%T@\t%p\0' 2>/dev/null | sort -z -rn | tail -z -n +$((KEEP_COPIES + 1)) | cut -z -f2- | xargs -0 -r rm -f --"
+        sudo bash -c "find \"$BACKUP_DIR\" -maxdepth 1 -type f \( -name 'pacman_database_*.tar.zst' -o -name 'pacman_database_*.tar.gz' \) -printf '%T@\t%p\0' 2>/dev/null | sort -z -rn | tail -z -n +$((KEEP_COPIES + 1)) | cut -z -f2- | xargs -0 -r rm -f --"
     else
         echo -e "${red}Failed to create backup!${reset}"
         echo -ne "${yellow}Continue anyway? [y/N]: ${reset}"
@@ -854,8 +919,15 @@ backup_pacman_db() {
     fi
 }
 
-run_interactive_task() {
-    /bin/bash -c "$1"
+execute_update_task() {
+    local cmd="$1"
+
+    if [[ "${ASU_TTY_OUT:-}" =~ ^[0-9]+$ ]] && [[ "${ASU_TTY_ERR:-}" =~ ^[0-9]+$ ]] && [ -t "$ASU_TTY_OUT" ] && [ -t 0 ]; then
+        /bin/bash -c "$cmd" 1>&$ASU_TTY_OUT 2>&$ASU_TTY_ERR <&0
+        return
+    fi
+
+    /bin/bash -c "$cmd"
 }
 
 # --- 5. Mirror Refresh Function ---
@@ -1064,6 +1136,35 @@ refresh_mirrors() {
     return 1
 }
 
+handle_daemon_sync_fail() {
+    if [[ "$DAEMON_MODE" == true ]]; then
+        local count_file="$CONFIG_DIR/sync_failures.count"
+        local count=0
+        if [[ -f "$count_file" ]]; then
+            count=$(cat "$count_file" 2>/dev/null)
+        fi
+        if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+            count=0
+        fi
+        count=$((count + 1))
+        echo "$count" > "$count_file"
+        if (( count > 0 && count % 3 == 0 )); then
+            if command -v notify-send >/dev/null 2>&1; then
+                local notif_icon="dialog-error"
+                [[ -f "$ICON_PATH" ]] && notif_icon="$ICON_PATH"
+                launch_detached notify-send -a "Arch Smart Update" -u critical -i "$notif_icon" \
+                    "Connection Warning" "Failed to connect to mirrors 3 times consecutively."
+            fi
+        fi
+    fi
+}
+
+handle_daemon_sync_success() {
+    if [[ "$DAEMON_MODE" == true ]]; then
+        rm -f "$CONFIG_DIR/sync_failures.count"
+    fi
+}
+
 # --- 6. Main Logic ---
 log_step "Requesting Sudo access..."
 if ! $DAEMON_MODE; then
@@ -1104,7 +1205,27 @@ echo -e "\n${blue}${bold}Checking for updates...${reset}"
 
 if [[ -f /var/lib/pacman/db.lck ]]; then
     if $DAEMON_MODE; then exit 0; fi
-    if sudo fuser /var/lib/pacman/db.lck >/dev/null 2>&1; then
+    lock_active=false
+    if command -v fuser &>/dev/null; then
+        if sudo fuser /var/lib/pacman/db.lck >/dev/null 2>&1; then
+            lock_active=true
+        fi
+    else
+        lock_pid=$(sudo cat /var/lib/pacman/db.lck 2>/dev/null)
+        if [[ "$lock_pid" =~ ^[0-9]+$ ]] && sudo kill -0 "$lock_pid" 2>/dev/null; then
+            lock_comm=$(ps -p "$lock_pid" -o comm= 2>/dev/null || sudo cat "/proc/$lock_pid/comm" 2>/dev/null)
+            if [[ "$lock_comm" =~ (pacman|yay|paru|pamac|trizen|pikaur|aura|pacaur) ]]; then
+                lock_active=true
+            fi
+        fi
+        
+        if [[ "$lock_active" == false ]]; then
+            if pgrep -x "pacman" >/dev/null 2>&1 || pgrep -x "yay" >/dev/null 2>&1 || pgrep -x "paru" >/dev/null 2>&1; then
+                lock_active=true
+            fi
+        fi
+    fi
+    if [ "$lock_active" = true ]; then
         echo -e "${red}Error: Pacman database is locked (/var/lib/pacman/db.lck).${reset}"
         echo -e "${yellow}Another package manager process is running.${reset}"
         exit 1
@@ -1188,6 +1309,7 @@ while (( attempt <= MAX_RETRIES )); do
 
             if [[ "$PACMAN_EXIT" == "124" || "$PACMAN_EXIT" == "137" ]]; then
                 log_step "Error: Database synchronization timed out after 10 minutes in daemon mode."
+                handle_daemon_sync_fail
                 exit 1
             fi
         else
@@ -1221,8 +1343,10 @@ while (( attempt <= MAX_RETRIES )); do
         if (( err_count >= 15 )); then
             if $DAEMON_MODE; then
                 echo "Network/Mirror error in background mode. Retrying next cycle."
+                handle_daemon_sync_fail
                 exit 0
             fi
+
             echo -e "\n${yellow}The selected mirror might not be optimal.${reset}"
             echo -ne "${white}Continue anyway? [y/N]: ${reset}"
             read -r force_cont
@@ -1235,6 +1359,9 @@ while (( attempt <= MAX_RETRIES )); do
 
         if [[ $PACMAN_EXIT -ne 0 ]]; then
             echo -e "${red}Error: Could not sync databases.${reset}"
+            if [[ "$DAEMON_MODE" == true ]]; then
+                    handle_daemon_sync_fail
+            fi
             exit 1
         else
             echo -e "${yellow}Proceeding despite mirror warnings...${reset}"
@@ -1245,6 +1372,10 @@ done
 
 if ! $DAEMON_MODE; then
     sudo chown -R "$(id -u):$(id -g)" "$CHECK_DB"
+fi
+
+if [[ "$DAEMON_MODE" == true ]]; then
+    handle_daemon_sync_success
 fi
 
 log_step "Calculating update list (pacman -Qu)..."
@@ -1853,7 +1984,7 @@ if [[ "$DAEMON_MODE" == true ]]; then
             echo "$pkg_count" > "$CACHE_FILE"
 
             if notify-send --help 2>&1 | grep -q -- "--action"; then
-                TMP_NOTIFY=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/asu_update.XXXXXX.sh")
+                TMP_NOTIFY=$(mktemp --suffix=.sh "${XDG_RUNTIME_DIR:-/tmp}/asu_update.XXXXXX")
                 cat <<EOF > "$TMP_NOTIFY"
 #!/bin/bash
 trap 'rm -f "\$0"' EXIT
@@ -1869,21 +2000,31 @@ export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export XDG_CONFIG_DIRS="${XDG_CONFIG_DIRS:-/etc/xdg}"
 export PATH="\$PATH:/usr/local/bin:/usr/bin:/bin"
 
-if [[ "\${XDG_CURRENT_DESKTOP,,}" == *"xfce"* || "\${XDG_CURRENT_DESKTOP,,}" == *"lxqt"* ]]; then
-    action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
+notif_daemon=\$(dbus-send --session --print-reply --dest=org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications.GetServerInformation 2>/dev/null | awk -F'"' '/string/ {print \$2; exit}')
+notif_daemon=\${notif_daemon,,}
+desktop_env=\${XDG_CURRENT_DESKTOP,,}
+
+use_single_action=false
+if [[ "\$notif_daemon" =~ (mako|dunst|lxqt|xfce|fnott|wired) ]] || [[ "\$desktop_env" =~ (sway|i3|hyprland|niri|lxqt|xfce|wlroots) ]]; then
+    use_single_action=true
+fi
+
+if [[ "\$use_single_action" == "true" ]]; then
+    action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
 else
     action=\$(notify-send -a "Arch Smart Update" -u normal -i "$notif_icon" --action="default=Update Now" --action="update=Update Now" "Safe Updates Available" "Found $pkg_count updates ($aur_count AUR).\nReady to install.")
 fi
 
 action_clean=\$(echo "\$action" | tr -d ' \n\r')
 
-if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action_clean" == "2" ]]; then
+if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action_clean" == "0" || "\$action_clean" == "1" || "\$action_clean" == "2" ]]; then
+    rm -f "\$0"
     if [[ -n "\$TERMINAL" ]] && command -v "\$TERMINAL" >/dev/null 2>&1; then
         exec "\$TERMINAL" -e "\$SCRIPT_BIN"
     elif command -v xdg-terminal-exec >/dev/null 2>&1; then
         exec xdg-terminal-exec "\$SCRIPT_BIN"
     else
-        for term_cmd in "alacritty -e" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal --disable-server -x" "xfce4-terminal -x" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
+        for term_cmd in "alacritty -e" "kitty --" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal --disable-server --" "xfce4-terminal --" "xfce4-terminal --disable-server -x" "xfce4-terminal -x" "terminator --" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
             bin="\${term_cmd%% *}"
             if command -v "\$bin" >/dev/null 2>&1; then
                 read -ra term_arr <<< "\$term_cmd"
@@ -2007,7 +2148,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 
         for cmd in "${CUSTOM_CMDS[@]}"; do
             echo -e "${dim}Executing: ${white}$cmd${reset}"
-            run_interactive_task "$cmd"
+            execute_update_task "$cmd"
             core_exit=$?
 
             if [[ $core_exit -ne 0 ]]; then
@@ -2057,7 +2198,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             tool_name="$BEST_UPDATE_TOOL"
 
             echo -e "${blue}${bold}Running $tool_name (Keyrings & Packages)...${reset}\n"
-            run_interactive_task "$tool_name"
+            execute_update_task "$tool_name"
             core_exit=$?
 
             pending_updates=$(check_pending_updates "repo_only")
@@ -2065,13 +2206,13 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             if [[ -z "$pending_updates" && $core_exit -eq 0 ]]; then
                 echo -e "\n${green}Core updates applied successfully.${reset}"
                 echo -e "\n${blue}${bold}Running Topgrade (Firmware, Flatpaks, Dotfiles)...${reset}\n"
-                run_interactive_task "topgrade" && UPDATE_SUCCESS=true
+                execute_update_task "topgrade" && UPDATE_SUCCESS=true
             else
                 echo -e "\n${yellow}$tool_name was cancelled or did not fully apply updates.${reset}"
                 echo -ne "${white}Run topgrade anyway? (Flatpaks/AUR etc) [y/N]: ${reset}"
                 read -r force_extra
                 if [[ "$force_extra" =~ ^[Yy]$ ]]; then
-                    run_interactive_task "topgrade" && UPDATE_SUCCESS=true
+                    execute_update_task "topgrade" && UPDATE_SUCCESS=true
                 else
                     echo -e "${dim}Skipping extra updates.${reset}\n"
                 fi
@@ -2081,7 +2222,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
             tool_name="$BEST_UPDATE_TOOL"
 
             echo -e "${blue}${bold}Running $tool_name...${reset}\n"
-            run_interactive_task "$tool_name"
+            execute_update_task "$tool_name"
             core_exit=$?
 
             pending_updates=$(check_pending_updates)
@@ -2100,7 +2241,7 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
                     echo -ne "${white}Run $helper_bin to apply remaining updates? [Y/n]: ${reset}"
                     if read -r force_aur; then
                         if [[ "$force_aur" =~ ^[Yy]$ || -z "$force_aur" ]]; then
-                            run_interactive_task "$AUR_HELPER $aur_flags"
+                            execute_update_task "$AUR_HELPER $aur_flags"
 
                             if [[ $? -eq 0 && -z "$(check_pending_updates)" ]]; then
                                 UPDATE_SUCCESS=true
@@ -2118,15 +2259,15 @@ if [[ "$answer" =~ ^[Yy]$ || -z "$answer" ]]; then
 
         elif [[ "$HAS_TOPGRADE" == "true" ]]; then
             echo -e "${blue}${bold}Running Topgrade (System, AUR, Firmware, etc.)...${reset}\n"
-            run_interactive_task "topgrade" && UPDATE_SUCCESS=true
+            execute_update_task "topgrade" && UPDATE_SUCCESS=true
 
         else
             echo -e "${blue}${bold}Running standard system update...${reset}\n"
             if [[ -n "$AUR_HELPER" ]]; then
-                run_interactive_task "$AUR_HELPER -Syu"
+                execute_update_task "$AUR_HELPER -Syu"
                 core_exit=$?
             else
-                run_interactive_task "sudo pacman -Syu"
+                execute_update_task "sudo pacman -Syu"
                 core_exit=$?
             fi
 
