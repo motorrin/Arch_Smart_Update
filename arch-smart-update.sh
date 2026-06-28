@@ -2033,7 +2033,7 @@ if [[ "\$action_clean" == "update" || "\$action_clean" == "default" || "\$action
     elif command -v xdg-terminal-exec >/dev/null 2>&1; then
         exec xdg-terminal-exec "\$SCRIPT_BIN"
     else
-        for term_cmd in "alacritty -e" "kitty --" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal --disable-server --" "xfce4-terminal --" "xfce4-terminal --disable-server -x" "xfce4-terminal -x" "terminator --" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
+        for term_cmd in "alacritty -e" "kitty --" "kitty" "konsole -e" "gnome-terminal --" "xfce4-terminal --disable-server -x" "xfce4-terminal -x" "terminator --" "terminator -x" "tilix -e" "foot" "wezterm start --" "qterminal -e" "lxterminal -e" "mate-terminal -x" "xterm -e"; do
             bin="\${term_cmd%% *}"
             if command -v "\$bin" >/dev/null 2>&1; then
                 read -ra term_arr <<< "\$term_cmd"
